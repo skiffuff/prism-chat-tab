@@ -18,7 +18,14 @@ app = FastAPI(title="AI Provider Daemon")
 CONFIG_FILE = os.environ.get("PRISM_CONFIG", os.path.expanduser("~/.config/prism/config.json"))
 ZENITY = shutil.which("zenity") or "zenity"
 WORKER_URL = os.environ.get("PRISM_WORKER_URL", "")
+# Direct Google AI API base used when no Cloudflare worker is configured
+# (the worker is only needed where Google Gemini is geo-blocked).
+GEMINI_DIRECT_BASE = "https://generativelanguage.googleapis.com"
 ANTHROPIC_URL = "https://api.anthropic.com"
+
+def _gemini_base() -> str:
+    """Base URL for Gemini requests: worker proxy if set, otherwise the direct Google API."""
+    return WORKER_URL or GEMINI_DIRECT_BASE
 RECORD_TRIGGER_RE = re.compile(r'(запис|запиши|запись экрана|просмотр|видь|видишь|посмотри|смотри|что на экране|что происходит|смотр|screen|watch|record)', re.IGNORECASE)
 
 DEFAULT_SYSTEM_INSTRUCTION = "You are a helpful and knowledgeable assistant. Always respond in Russian unless the user writes in another language. CRITICAL: Never use markdown bold (**), bullet dashes (--), or markdown lists in your responses. Output plain conversational text only. You have access to the `run_bash` tool. When the user asks you to execute a command, take a screenshot, interact with the clipboard, or perform any system action, you MUST use the `run_bash` tool to execute it."
@@ -384,7 +391,7 @@ def _generate_chat_title(first_text: str) -> str:
             data = res.json()
             title = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text").strip()
         else:
-            endpoint = f"{WORKER_URL}/v1beta/models/{current_model}:generateContent?key={_api_key()}"
+            endpoint = f"{_gemini_base()}/v1beta/models/{current_model}:generateContent?key={_api_key()}"
             payload = {
                 "contents": [{"role": "user", "parts": [{"text": prompt}]}],
                 "generationConfig": {"temperature": 0.8, "topP": 0.95}
@@ -503,7 +510,7 @@ def stop_screen_recording_and_analyze():
             with open(vid_path, "rb") as f:
                 v_data = base64.b64encode(f.read()).decode()
             os.remove(vid_path)
-            endpoint = f"{WORKER_URL}/v1beta/models/{current_model}:generateContent?key={_api_key()}"
+            endpoint = f"{_gemini_base()}/v1beta/models/{current_model}:generateContent?key={_api_key()}"
             payload = {
                 "contents": [{
                     "role": "user",
@@ -688,7 +695,7 @@ def _call_gemini(messages):
         "tools": [BASH_TOOL_DECLARATION],
         "generationConfig": {"temperature": 0.7, "topP": 0.95}
     }
-    endpoint = f"{WORKER_URL}/v1beta/models/{current_model}:generateContent?key={_api_key()}"
+    endpoint = f"{_gemini_base()}/v1beta/models/{current_model}:generateContent?key={_api_key()}"
     res = requests.post(endpoint, json=payload,
                         headers={"Content-Type": "application/json; charset=utf-8"})
     try:
@@ -923,7 +930,7 @@ async def list_models():
         models = [{"id": m, "label": m} for m in pdef["default_models"]]
     else:
         try:
-            url = f"{WORKER_URL}/v1beta/models?key={_api_key()}"
+            url = f"{_gemini_base()}/v1beta/models?key={_api_key()}"
             res = requests.get(url, timeout=5)
             if res.status_code == 200:
                 data = res.json()
@@ -1195,7 +1202,7 @@ async def validate_settings(request: Request):
             return Response(content=json.dumps({"valid": False, "error": "Invalid Claude API key format"}, ensure_ascii=False),
                             status_code=200, media_type="application/json")
         else:
-            r = requests.get(f"{WORKER_URL}/v1beta/models?key={key}", timeout=10)
+            r = requests.get(f"{_gemini_base()}/v1beta/models?key={key}", timeout=10)
             if r.status_code == 200:
                 models = r.json().get("models", [])
                 return Response(content=json.dumps({"valid": True, "models": len(models)}, ensure_ascii=False),

@@ -1,8 +1,8 @@
 {
   "provider": "gemini",
   "model": "gemini-3.6-flash",
-  "worker_url": "https://YOUR-WORKER.NAMESPACE.workers.dev",
-  "anthropic_url": "https://YOUR-WORKER.NAMESPACE.workers.dev",
+  "worker_url": "",
+  "anthropic_url": "",
   "system_instruction": "You are a helpful and knowledgeable assistant. Always respond in Russian unless the user writes in another language. CRITICAL: Never use markdown bold (**), bullet dashes (--), or markdown lists in your responses. Output plain conversational text only. You have access to the `run_bash` tool. When the user asks you to execute a command, take a screenshot, interact with the clipboard, or perform any system action, you MUST use the `run_bash` tool to execute it.",
   "glow": {
     "enabled": true,
