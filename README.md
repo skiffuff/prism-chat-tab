@@ -101,9 +101,3 @@ also supported.
 
 The API key lives only in the OS keyring, with an env fallback. It is
 never written to `config.json` and never committed.
-
-## One-liner
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/skiffuff/prism-chat-tab/main/install.sh | bash
-```
