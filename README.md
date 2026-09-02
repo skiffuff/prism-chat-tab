@@ -12,7 +12,16 @@ worker is **optional and only needed if Google Gemini is blocked in your
 country** — set `worker_url` in the config and requests will go through it
 instead.
 
-## Setup
+## Install
+
+One-liner:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/skiffuff/prism-chat-tab/main/install.sh | bash
+```
+
+It installs the tab, the daemon, a venv with dependencies, a starter config
+and an optional systemd unit. Or manually:
 
 ```bash
 python3 -m venv .venv
