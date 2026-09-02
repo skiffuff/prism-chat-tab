@@ -1,41 +1,106 @@
 # Prism
 
-Chat tab for the [Caelestia](https://github.com/hyprwm/serpantinum) shell,
-backed by a small local daemon that talks to Gemini (or Claude).
-
-## How it works
-
-`PrismTab.qml` (a QtQuick dashboard widget) → local daemon on `:5000` → AI API.
-
-Requests go **directly to the Gemini / Claude API** by default. A Cloudflare
-worker is **optional and only needed if Google Gemini is blocked in your
-country** — set `worker_url` in the config and requests will go through it
-instead.
+Chat tab for the [Caelestia](https://github.com/caelestia-dots/shell) shell,
+backed by a lightweight local daemon. Works with **Google Gemini** and
+**Claude (Anthropic)** out of the box.
 
 ## Install
-
-One-liner:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/skiffuff/prism-chat-tab/main/install.sh | bash
 ```
 
-It installs the tab, the daemon, a venv with dependencies, a starter config
-and an optional systemd unit. Or manually:
+Then set your API key and start the daemon:
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-
-cp config.example.json ~/.config/prism/config.json
-export GEMINI_API_KEY=...        # or ANTHROPIC_API_KEY=...
-.venv/bin/python backend/prism_daemon.py
-
-cp PrismTab.qml ~/.config/caelestia/
+export GEMINI_API_KEY=your_key      # or ANTHROPIC_API_KEY=...
+~/.local/share/prism/venv/bin/python ~/.local/share/prism/prism_daemon.py
 ```
+
+The tab will appear in the Caelestia dashboard after a restart.
+
+---
+
+## Features
+
+### Tab (PrismTab.qml)
+
+**Collapsible sidebar** — toggle between full and compact (icon-only) mode
+with a smooth width animation. The sidebar stays usable in both states.
+
+**Multiple chat sessions** — create, switch between, rename and delete
+independent conversations. Each session keeps its own message history.
+
+**Auto-title** — new chats are automatically named after the user's first
+message (truncated to 20 characters), so you can tell them apart at a glance.
+
+**Smooth message animations** — each new message fades in and slides up from
+below with a cubic ease-out curve.
+
+**Daemon health indicator** — a small dot in the header pulses green when the
+daemon is reachable and turns red when it is offline. The status is polled
+every 10 seconds.
+
+**Exec message styling** — shell commands executed by the daemon are rendered
+in a monospace font with a dark background and yellow border, so they are
+visually distinct from regular replies.
+
+**Timestamps** — every message carries a human-readable time stamp.
+
+### Daemon (backend/prism_daemon.py)
+
+**Multi-provider** — switch between Google Gemini and Claude at any time via
+the API. Each provider has its own model list, system instruction and
+API key.
+
+**Direct API or Cloudflare worker** — by default requests go directly to the
+Gemini / Claude API. A Cloudflare worker is only needed if Google is blocked
+in your country; set `worker_url` in the config and all Gemini requests will
+go through it instead.
+
+**`run_bash` tool** — the AI can execute arbitrary shell commands, interact
+with the clipboard, read and open files, or perform any system action. The
+model receives the command output and continues the conversation.
+
+**Screen recording & analysis** — say "what is on my screen", "watch my
+screen" or "record the screen" and the daemon will start capturing video
+(via `wf-recorder` or `ffmpeg`). Stop the recording and the AI will analyze
+the footage and answer your question.
+
+**Clipboard image** — paste an image from the clipboard (Wayland) and the
+daemon sends it to the model as an inline attachment.
+
+**File picker** — open a native file dialog (`zenity`) to attach any local
+file to your message.
+
+**File reader** — the AI can read any file on your system via the
+`/read_file` endpoint.
+
+**Chat session persistence** — all sessions and their message history are
+saved to `~/.local/share/prism/sessions.json` and survive daemon restarts.
+
+**Usage & quota tracking** — request count, prompt/output tokens and daily
+limits are tracked per model and stored in `~/.cache/prism_usage.json`.
+
+**Configurable glow effect** — a decorative ring animation that external
+UIs can display while the AI is processing. Controlled via `glow` settings
+in the config (ring count, sigma, alpha, gradient).
+
+**Configurable system instruction** — full control over the AI's behaviour
+via `system_instruction` in `~/.config/prism/config.json`.
+
+**OS keyring** — API keys are stored only in the system keyring
+(SecretStorage / GNOME Keyring) and never written to disk. A
+`GEMINI_API_KEY` / `ANTHROPIC_API_KEY` environment variable fallback is
+also supported.
 
 ## Security
 
-The API key lives only in the OS keyring (SecretStorage), with a
-`GEMINI_API_KEY` / `ANTHROPIC_API_KEY` env fallback. It is never written to
-`config.json` and never committed.
+The API key lives only in the OS keyring, with an env fallback. It is
+never written to `config.json` and never committed.
+
+## One-liner
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/skiffuff/prism-chat-tab/main/install.sh | bash
+```
