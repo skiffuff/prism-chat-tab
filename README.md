@@ -4,7 +4,7 @@
 > the QML interface were written, debugged and iterated by an LLM.
 
 Chat tab for the [Caelestia](https://github.com/caelestia-dots/shell) shell,
-backed by a lightweight local daemon. Works with **Google Gemini** and
+backed by a lightweight local FastAPI daemon. Works with **Google Gemini** and
 **Claude (Anthropic)** out of the box.
 
 ## Install
@@ -28,76 +28,106 @@ The tab will appear in the Caelestia dashboard after a restart.
 
 ### Tab (PrismTab.qml)
 
-**Collapsible sidebar** — toggle between full and compact (icon-only) mode
-with a smooth width animation. The sidebar stays usable in both states.
-
-**Multiple chat sessions** — create, switch between, rename and delete
-independent conversations. Each session keeps its own message history.
-
-**Auto-title** — new chats are automatically named after the user's first
-message (truncated to 20 characters), so you can tell them apart at a glance.
-
-**Smooth message animations** — each new message fades in and slides up from
-below with a cubic ease-out curve.
-
-**Daemon health indicator** — a small dot in the header pulses green when the
-daemon is reachable and turns red when it is offline. The status is polled
-every 10 seconds.
-
-**Exec message styling** — shell commands executed by the daemon are rendered
-in a monospace font with a dark background and yellow border, so they are
-visually distinct from regular replies.
-
-**Timestamps** — every message carries a human-readable time stamp.
+| Feature | Description |
+|---------|-------------|
+| **Collapsible sidebar** | Toggle between full and compact (icon-only) mode with smooth width animation. |
+| **Multiple chat sessions** | Create, switch between, rename and delete independent conversations. |
+| **Auto-title** | New chats are automatically named after the user's first message (truncated to 20 chars). |
+| **Smooth animations** | Each new message fades in and slides up with a cubic ease-out curve. |
+| **Daemon health indicator** | Pulsing green dot when daemon is reachable, red when offline. Polls every 10 seconds. |
+| **Exec message styling** | Shell commands rendered in monospace with dark background and yellow border. |
+| **Timestamps** | Every message carries a human-readable timestamp. |
 
 ### Daemon (backend/prism_daemon.py)
 
-**Multi-provider** — switch between Google Gemini and Claude at any time via
-the API. Each provider has its own model list, system instruction and
-API key.
+| Feature | Description |
+|---------|-------------|
+| **Multi-provider** | Switch between Google Gemini and Claude at any time via the API. |
+| **Direct API or Cloudflare worker** | Requests go directly to Gemini/Cloudflare unless Google is geo-blocked. |
+| **`run_bash` tool** | AI can execute shell commands, interact with clipboard, read/open files. |
+| **Screen recording & analysis** | "what is on my screen" starts video capture (wf-recorder/ffmpeg) and analyzes it. |
+| **Clipboard image** | Paste an image from Wayland clipboard; daemon sends it to the model. |
+| **File picker** | Native file dialog (`zenity`) to attach local files to messages. |
+| **`/read_file` endpoint** | AI can read any file on your system. |
+| **Session persistence** | All sessions saved to `~/.local/share/prism/sessions.json`. |
+| **Usage & quota tracking** | Request count, prompt/output tokens, daily limits per model. |
+| **Configurable glow** | Decorative ring animation controlled via `glow` settings in config. |
+| **Configurable system instruction** | Full control over AI behaviour via `system_instruction` in config. |
+| **OS keyring** | API keys stored only in SecretStorage/GNOME Keyring, never written to disk. |
 
-**Direct API or Cloudflare worker** — by default requests go directly to the
-Gemini / Claude API. A Cloudflare worker is only needed if Google is blocked
-in your country; set `worker_url` in the config and all Gemini requests will
-go through it instead.
+## Configuration
 
-**`run_bash` tool** — the AI can execute arbitrary shell commands, interact
-with the clipboard, read and open files, or perform any system action. The
-model receives the command output and continues the conversation.
+Config file: `~/.config/prism/config.json`
 
-**Screen recording & analysis** — say "what is on my screen", "watch my
-screen" or "record the screen" and the daemon will start capturing video
-(via `wf-recorder` or `ffmpeg`). Stop the recording and the AI will analyze
-the footage and answer your question.
+```json
+{
+  "provider": "gemini",
+  "model": "gemini-3.6-flash",
+  "worker_url": "https://your-worker.example.com",
+  "anthropic_url": "https://api.anthropic.com",
+  "system_instruction": "You are a helpful assistant...",
+  "glow": {
+    "enabled": true,
+    "ring_count": 96,
+    "sigma": 28,
+    "alpha": 0.42,
+    "gradient": null
+  }
+}
+```
 
-**Clipboard image** — paste an image from the clipboard (Wayland) and the
-daemon sends it to the model as an inline attachment.
+## API Endpoints
 
-**File picker** — open a native file dialog (`zenity`) to attach any local
-file to your message.
-
-**File reader** — the AI can read any file on your system via the
-`/read_file` endpoint.
-
-**Chat session persistence** — all sessions and their message history are
-saved to `~/.local/share/prism/sessions.json` and survive daemon restarts.
-
-**Usage & quota tracking** — request count, prompt/output tokens and daily
-limits are tracked per model and stored in `~/.cache/prism_usage.json`.
-
-**Configurable glow effect** — a decorative ring animation that external
-UIs can display while the AI is processing. Controlled via `glow` settings
-in the config (ring count, sigma, alpha, gradient).
-
-**Configurable system instruction** — full control over the AI's behaviour
-via `system_instruction` in `~/.config/prism/config.json`.
-
-**OS keyring** — API keys are stored only in the system keyring
-(SecretStorage / GNOME Keyring) and never written to disk. A
-`GEMINI_API_KEY` / `ANTHROPIC_API_KEY` environment variable fallback is
-also supported.
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Daemon health check |
+| `/providers` | GET | List available providers |
+| `/provider` | POST | Set active provider |
+| `/models` | GET | List models for current provider |
+| `/model` | POST | Set active model |
+| `/chat` | POST | Send message and get response |
+| `/tool/confirm` | POST | Confirm/deny a pending tool execution |
+| `/quota` | GET | Usage and quota status |
+| `/history` | GET | Chat history for active session |
+| `/sessions` | GET | List all sessions |
+| `/session/new` | POST | Create new session |
+| `/session/select` | POST | Switch to session |
+| `/session/rename` | POST | Rename session |
+| `/session/delete` | POST | Delete session |
+| `/watch/start` | POST | Start screen recording |
+| `/watch/stop` | POST | Stop screen recording and analyze |
+| `/watch/status` | GET | Screen recording status |
+| `/clipboard_image` | POST | Get clipboard image (Wayland) |
+| `/read_file` | POST | Read a file from system |
+| `/pick_file` | POST | Open file picker dialog |
+| `/settings` | GET | Get daemon settings |
+| `/settings/validate` | POST | Validate API key |
 
 ## Security
 
-The API key lives only in the OS keyring, with an env fallback. It is
-never written to `config.json` and never committed.
+API keys are stored only in the OS keyring (SecretStorage / GNOME Keyring)
+and never written to `config.json`. A `GEMINI_API_KEY` / `ANTHROPIC_API_KEY`
+environment variable fallback is also supported.
+
+### Security Features
+
+- **Command injection prevention** - `run_bash` uses `shell=False` with a restrictive command whitelist
+- **SSRF protection** - URL validation prevents subdomain takeover via DNS rebinding
+- **Path traversal protection** - File access is restricted to user's home directory
+- **Auth token** - All endpoints require `X-Prism-Token` header
+- **Rate limiting** - 10 requests per minute per client IP
+- **No CORS** - Browser CORS preflight requests are rejected (QML XHR is not subject to CORS)
+
+## Troubleshooting
+
+**Daemon won't start:**
+- Ensure `~/.local/share/prism/venv/bin/python` exists
+- Check Python dependencies: `pip install fastapi uvicorn requests secretstorage`
+
+**No API key error:**
+- Set `GEMINI_API_KEY` or `ANTHROPIC_API_KEY` environment variable
+- Or add key via daemon settings API
+
+**Screen recording not working:**
+- Install `wf-recorder` (Wayland) or `ffmpeg`
+- Verify the daemon can access the display: `export DISPLAY=:0`
