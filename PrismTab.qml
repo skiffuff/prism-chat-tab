@@ -34,8 +34,14 @@ Rectangle {
     readonly property string baseUrl: "http://127.0.0.1:5000"
     readonly property string backendUrl: baseUrl + "/chat"
     readonly property string healthUrl: baseUrl + "/health"
+    readonly property string confirmUrl: baseUrl + "/tool/confirm"
     // Prefix that marks a message as a shell command executed by the daemon
     readonly property string execMark: "[EXEC]:"
+
+    // Daemon auth token (read from ~/.local/share/prism/daemon.token)
+    property string authToken: ""
+    // Id of the run_bash tool call waiting for user confirmation
+    property string pendingToolCallId: ""
 
     // ==========================================
     // UI state
@@ -59,6 +65,24 @@ Rectangle {
         id: messagesModel       // messages of the active chat
     }
 
+    function readAuthToken() {
+        try {
+            var home = Qt.getenv("HOME");
+            var tokenPath = "file://" + home + "/.local/share/prism/daemon.token";
+            var xhr = new XMLHttpRequest();
+            xhr.open("GET", tokenPath, false);
+            xhr.send();
+            if ((xhr.status === 0 || xhr.status === 200) && xhr.responseText) {
+                var t = xhr.responseText.trim();
+                if (t !== "")
+                    root.authToken = t;
+            }
+        } catch (e) {
+            // Token file not readable — daemon will reject requests (401).
+        }
+        checkDaemonHealth();
+    }
+
     // ==========================================
     // HTTP helper — single XHR implementation for all requests
     // ==========================================
@@ -67,6 +91,8 @@ Rectangle {
         var done = false;
 
         xhr.open(method, url, true);
+        if (root.authToken !== "")
+            xhr.setRequestHeader("X-Prism-Token", root.authToken);
         if (payload !== undefined)
             xhr.setRequestHeader("Content-Type", "application/json");
 
@@ -184,13 +210,7 @@ Rectangle {
                 // Success: parse the daemon reply and show it
                 isLoading = false;
                 isDaemonOnline = true;
-                try {
-                    var responseObj = JSON.parse(xhr.responseText);
-                    var reply = responseObj.response || "Получен пустой ответ от демона.";
-                    appendMessage("gemini", reply, reply.indexOf(execMark) === 0);
-                } catch (e) {
-                    appendMessage("system", "[ Ошибка парсинга JSON ответа: " + e.message + " ]", true);
-                }
+                handleDaemonResponse(xhr);
             },
             function(xhr) {
                 // Failure: distinguish network errors from HTTP errors
@@ -198,8 +218,57 @@ Rectangle {
                 isDaemonOnline = false;
                 if (xhr.status === 0)
                     appendMessage("system", "[ Ошибка сети: не удалось подключиться к " + backendUrl + " ]", true);
+                else if (xhr.status === 401)
+                    appendMessage("system", "[ Неавторизованный запрос: проверьте daemon.token ]", true);
                 else
                     appendMessage("system", "[ Ошибка связи с демоном (HTTP " + xhr.status + ") ]", true);
+            }
+        );
+    }
+
+    // Parse a daemon /chat or /tool/confirm reply: either a final answer or a
+    // pending run_bash confirmation that must be shown to the user.
+    function handleDaemonResponse(xhr) {
+        try {
+            var obj = JSON.parse(xhr.responseText);
+            if (obj.pending) {
+                root.pendingToolCallId = obj.tool_call_id || "";
+                confirmCommandText.text = obj.command || "";
+                confirmAllways.visible = !obj.dangerous;
+                confirmDangerNote.visible = !!obj.dangerous;
+                root.openConfirmModal();
+                return;
+            }
+            var reply = obj.response ||
+                        (obj.error ? "[ Ошибка демона: " + obj.error + " ]" :
+                         "Получен пустой ответ от демона.");
+            appendMessage("gemini", reply, reply.indexOf(execMark) === 0);
+        } catch (e) {
+            appendMessage("system", "[ Ошибка парсинга JSON ответа: " + e.message + " ]", true);
+        }
+    }
+
+    // Send the user's decision for a pending run_bash call to /tool/confirm.
+    function confirmTool(decision) {
+        if (root.pendingToolCallId === "")
+            return;
+        confirmModal.close();
+        var toolCallId = root.pendingToolCallId;
+        root.pendingToolCallId = "";
+        isLoading = true;
+        httpRequest("POST", confirmUrl, JSON.stringify({ "tool_call_id": toolCallId, "decision": decision }),
+            function(xhr) {
+                isLoading = false;
+                isDaemonOnline = true;
+                handleDaemonResponse(xhr);
+            },
+            function(xhr) {
+                isLoading = false;
+                isDaemonOnline = false;
+                if (xhr.status === 401)
+                    appendMessage("system", "[ Неавторизованный запрос: проверьте daemon.token ]", true);
+                else
+                    appendMessage("system", "[ Ошибка подтверждения команды (HTTP " + xhr.status + ") ]", true);
             }
         );
     }
@@ -213,7 +282,7 @@ Rectangle {
 
     Component.onCompleted: {
         createNewChat("Новый диалог");
-        checkDaemonHealth();
+        readAuthToken();
     }
 
     // Periodically refresh the daemon online status
@@ -568,6 +637,7 @@ Rectangle {
                                 font.pixelSize: 13
                                 font.family: messageDelegate.isExecMsg ? "JetBrains Mono, Fira Code, monospace" : "Sans"
                                 wrapMode: Text.Wrap
+                                textFormat: Text.PlainText
                             }
 
                             // Timestamp
@@ -679,6 +749,123 @@ Rectangle {
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+
+    // ==========================================
+    // run_bash confirmation modal
+    // ==========================================
+    function openConfirmModal() {
+        confirmModal.x = Math.round(root.width / 2 - confirmModal.width / 2);
+        confirmModal.y = Math.round(root.height / 2 - confirmModal.height / 2);
+        confirmModal.open();
+    }
+
+    Popup {
+        id: confirmModal
+        width: 460
+        implicitHeight: column.implicitHeight + 40
+        modal: true
+        focus: true
+        closePolicy: Popup.NoAutoClose
+        background: Rectangle {
+            color: palette.surface
+            radius: 14
+            border.width: 1
+            border.color: palette.surfaceAlt
+        }
+
+        ColumnLayout {
+            id: column
+            anchors.fill: parent
+            anchors.margins: 16
+            spacing: 12
+
+            Text {
+                text: "Подтверждение команды"
+                color: palette.text
+                font.pixelSize: 15
+                font.bold: true
+            }
+
+            Text {
+                text: "Модель хочет выполнить команду в терминале:"
+                color: palette.textMuted
+                font.pixelSize: 12
+                wrapMode: Text.Wrap
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                implicitHeight: confirmCommandText.implicitHeight + 16
+                color: palette.black
+                radius: 8
+                border.width: 1
+                border.color: palette.yellow
+
+                Text {
+                    id: confirmCommandText
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    color: palette.green
+                    font.pixelSize: 12
+                    font.family: "JetBrains Mono, Fira Code, monospace"
+                    wrapMode: Text.Wrap
+                }
+            }
+
+            Text {
+                id: confirmDangerNote
+                visible: false
+                text: "⚠ Опасная команда — аккуратно."
+                color: palette.red
+                font.pixelSize: 12
+                font.bold: true
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                Button {
+                    id: confirmDeny
+                    Layout.fillWidth: true
+                    text: "Отклонить"
+                    palette.buttonText: palette.text
+                    background: Rectangle {
+                        color: palette.surfaceAlt
+                        radius: 8
+                        implicitHeight: 36
+                    }
+                    onClicked: root.confirmTool("deny")
+                }
+
+                Button {
+                    id: confirmOnce
+                    Layout.fillWidth: true
+                    text: "Разрешить один раз"
+                    palette.buttonText: palette.black
+                    background: Rectangle {
+                        color: palette.accent
+                        radius: 8
+                        implicitHeight: 36
+                    }
+                    onClicked: root.confirmTool("allow")
+                }
+
+                Button {
+                    id: confirmAllways
+                    Layout.fillWidth: true
+                    text: "Разрешить всегда"
+                    palette.buttonText: palette.black
+                    background: Rectangle {
+                        color: palette.green
+                        radius: 8
+                        implicitHeight: 36
+                    }
+                    onClicked: root.confirmTool("never")
                 }
             }
         }

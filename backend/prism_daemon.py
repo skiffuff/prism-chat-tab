@@ -9,11 +9,29 @@ import time
 import asyncio
 import subprocess
 import shutil
+import secrets
+import fnmatch
 import requests
 import uvicorn
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
+from urllib.parse import urlparse
 
 app = FastAPI(title="AI Provider Daemon")
+
+#
+# ── Security: applyNoCors middleware to harden against browser CSRF ─────────
+#
+@app.middleware("http")
+async def _no_cors(request: Request, call_next):
+    # Reject browser CORS preflight outright. Same-origin QML calls use
+    # XHR which is not subject to CORS (QML's XMLHttpRequest is not
+    # sandboxed like a web page), so no legitimate cross-origin browser
+    # request is lost.
+    if request.method == "OPTIONS":
+        return JSONResponse(status_code=403, content={"detail": "CORS not allowed"})
+    return await call_next(request)
 
 CONFIG_FILE = os.environ.get("PRISM_CONFIG", os.path.expanduser("~/.config/prism/config.json"))
 ZENITY = shutil.which("zenity") or "zenity"
@@ -156,8 +174,44 @@ def _save_usage():
         os.makedirs(os.path.dirname(USAGE_FILE), exist_ok=True)
         with open(USAGE_FILE, "w") as f:
             json.dump(usage, f)
+        try:
+            os.chmod(USAGE_FILE, 0o600)
+        except Exception:
+            pass
     except Exception:
         pass
+
+def _secure_file(path: str):
+    """Best-effort chmod 0600 for daemon state files."""
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        os.chmod(path, 0o600)
+    except Exception:
+        pass
+
+def _allowed_read_path(path: str):
+    """Resolve a client-supplied path, ensuring it stays inside $HOME and
+    outside sensitive directories (~/.ssh, ~/.gnupg, ~/.config/prism)."""
+    if not path or not isinstance(path, str):
+        return None
+    try:
+        home = os.path.expanduser("~")
+        real_home = os.path.normpath(os.path.realpath(home))
+        rp = os.path.normpath(os.path.realpath(path))
+        if rp != real_home and not rp.startswith(real_home + os.sep):
+            return None
+        banned = [
+            os.path.realpath(os.path.expanduser("~/.ssh")),
+            os.path.realpath(os.path.expanduser("~/.gnupg")),
+            os.path.realpath(os.path.expanduser("~/.config/prism")),
+            os.path.realpath(os.path.expanduser("~/.local/share/prism")),
+        ]
+        for b in banned:
+            if rp == b or rp.startswith(b + os.sep):
+                return None
+        return rp
+    except Exception:
+        return None
 
 _load_usage()
 
@@ -334,6 +388,7 @@ def _save_sessions():
         os.makedirs(os.path.dirname(SESSIONS_FILE), exist_ok=True)
         with open(SESSIONS_FILE, "w", encoding="utf-8") as f:
             json.dump(_store, f, ensure_ascii=False, indent=2)
+        _secure_file(SESSIONS_FILE)
     except Exception:
         pass
 
@@ -408,6 +463,182 @@ def _generate_chat_title(first_text: str) -> str:
 
 record_state = {"active": False, "process": None, "prompt": "Analyze the screen recording and help."}
 _watch_lock = threading.Lock()
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Security: auth token, rate limiting, run_bash permission flow
+# ══════════════════════════════════════════════════════════════════════
+
+TOKEN_FILE = os.environ.get("PRISM_TOKEN_FILE",
+                            os.path.expanduser("~/.local/share/prism/daemon.token"))
+PERMISSIONS_FILE = os.path.expanduser("~/.config/prism/permissions.json")
+
+def _ensure_token_file():
+    """Generate a random daemon token on first start, store with 0600 perms."""
+    try:
+        os.makedirs(os.path.dirname(TOKEN_FILE), exist_ok=True)
+        if not os.path.exists(TOKEN_FILE) or os.path.getsize(TOKEN_FILE) == 0:
+            with open(TOKEN_FILE, "w") as f:
+                f.write(secrets.token_urlsafe(32))
+            os.chmod(TOKEN_FILE, 0o600)
+        else:
+            try:
+                os.chmod(TOKEN_FILE, 0o600)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+_ensure_token_file()
+
+def _load_token() -> str:
+    try:
+        if os.path.exists(TOKEN_FILE):
+            with open(TOKEN_FILE, "r") as f:
+                return f.read().strip()
+    except Exception:
+        pass
+    return ""
+
+DAEMON_TOKEN = _load_token()
+
+def DaemonToken() -> str:
+    """The current expected daemon token (lazy re-read in case of rotation)."""
+    return DAEMON_TOKEN if DAEMON_TOKEN else _load_token()
+
+def _authorize(request: Request) -> bool:
+    """Return True if the request carries the correct X-Prism-Token header."""
+    supplied = request.headers.get("X-Prism-Token", "")
+    expected = DaemonToken()
+    return bool(expected) and secrets.compare_digest(supplied, expected)
+
+# ── Rate limiting (in-memory, simple counter per client IP) ──────────────
+RATE_LIMIT_WINDOW = 60      # seconds
+RATE_LIMIT_MAX = 10         # max requests per window per client
+_rate_limiter = {}
+_rate_lock = threading.Lock()
+
+def _rate_limited(request: Request) -> bool:
+    """Return True if the client exceeded the chat request rate."""
+    client = request.client.host if request.client else "unknown"
+    now = time.time()
+    try:
+        with _rate_lock:
+            cur = _rate_limiter.get(client)
+            if not cur or now - cur[1] > RATE_LIMIT_WINDOW:
+                _rate_limiter[client] = [1, now]
+                return False
+            cur[0] += 1
+            cur[1] = now
+            return cur[0] > RATE_LIMIT_MAX
+    except Exception:
+        return False
+
+
+# ── run_bash permission flow ──────────────────────────────────────────────
+# Tool calls are not executed immediately: they are returned to the client as
+# "pending" tool_use items, the client asks the user, and then calls
+# /tool/confirm with a decision. Decisions are tracked here while waiting.
+PENDING_CONFIRM_TTL = 120  # seconds
+
+# pending[tool_use_id] = {"datetime": ts, "resolved": None|"allow"|"deny"|"never",
+#                          "command": str, "session_id": str}
+_pending_confirm = {}
+_pending_lock = threading.Lock()
+
+def _allowed_patterns() -> list:
+    """Load globally-allowed command patterns from disk."""
+    try:
+        if os.path.exists(PERMISSIONS_FILE):
+            with open(PERMISSIONS_FILE, "r") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return [p.get("pattern", "") for p in data if p.get("action") == "allow" and p.get("pattern")]
+            if isinstance(data, dict) and "rules" in data:
+                return [p.get("pattern", "") for p in data["rules"] if p.get("action") == "allow" and p.get("pattern")]
+    except Exception:
+        pass
+    return []
+
+ALLOWED_PATTERNS = _allowed_patterns()
+
+def _save_allowed_patterns(patterns):
+    try:
+        os.makedirs(os.path.dirname(PERMISSIONS_FILE), exist_ok=True)
+        rules = [{"pattern": p, "action": "allow"} for p in patterns]
+        with open(PERMISSIONS_FILE, "w") as f:
+            json.dump({"rules": rules}, f, indent=2)
+        os.chmod(PERMISSIONS_FILE, 0o600)
+    except Exception:
+        pass
+
+# Patterns that must NEVER be auto-allowed — require per-use confirmation.
+DANGEROUS_PATTERNS = [
+    r"rm\s+-rf", r"rm\s+-fr", "mkfs", r"dd\s+", r"sudo\s", "reboot", "shutdown",
+    r"curl\s+.*\|\s*(ba)?sh", r"wget\s+.*\|\s*(ba)?sh",
+    r".*\|\s*(ba)?sh", r">\s*/etc", r">\s*/boot", r"chmod\s+-R\s+777",
+    r"mv\s+/", r"rm\s+-", "：etc", r"passwd",
+]
+
+def _is_dangerous(command: str) -> bool:
+    cmd = (command or "").strip().lower()
+    for pat in DANGEROUS_PATTERNS:
+        if re.search(pat, cmd):
+            return True
+    # Never auto-allow writes into system directories
+    if re.search(r'(^|[;&|]\s*)\s*(sudo|rm|mv|dd|mkfs)\s', cmd):
+        return True
+    return False
+
+def _matches_pattern(command: str, pattern: str) -> bool:
+    """fnmatch-style check (git * matches 'git status' but not 'git status | rm -rf')."""
+    p = (pattern or "").strip().rstrip("*").lower()
+    c = (command or "").strip().lower()
+    # Rule out dangerous globs
+    if _is_dangerous(command):
+        return False
+    return fnmatch.fnmatch(c, (pattern or "").strip().lower())
+
+def _command_ok_by_pattern(command: str) -> bool:
+    """Check if the command matches an allowed pattern (and is not dangerous)."""
+    try:
+        if _is_dangerous(command):
+            return False
+        for pat in _allowed_patterns():
+            if pat and _matches_pattern(command, pat):
+                return True
+    except Exception:
+        pass
+    return False
+
+def _expire_pending():
+    """Drop stale pending confirmations."""
+    now = time.time()
+    with _pending_lock:
+        stale = [k for k, v in _pending_confirm.items()
+                 if v.get("resolved") is None and (now - v.get("ts", 0)) > PENDING_CONFIRM_TTL]
+        for k in stale:
+            _pending_confirm[k]["resolved"] = "deny"  # treat timeout as deny
+
+def _grant_pattern(pattern: str):
+    """Persist an allowed pattern (safe ones only).
+
+    For simple commands (no pipes/redirection/globs) store the leading word
+    with a trailing wildcard ("git status" -> "git *"). Anything containing
+    shell metacharacters is stored verbatim as an exact-match pattern.
+    """
+    pat = (pattern or "").strip()
+    if not pat or _is_dangerous(pattern):
+        return False
+    first = (pat.split()[0] if pat.split() else pat)[:64]
+    if re.search(r'[|>;&`$*?\[\]{}()\\]', pat):
+        pat = pat  # keep verbatim (exact match only)
+    elif first:
+        pat = first + " *"
+    if pat not in ALLOWED_PATTERNS:
+        ALLOWED_PATTERNS.append(pat)
+        _save_allowed_patterns(ALLOWED_PATTERNS)
+    return True
 
 def _glow_flag(on):
     try:
@@ -538,19 +769,25 @@ def stop_screen_recording_and_analyze():
         return f"Video analysis error: {e}"
 
 @app.post("/watch/start")
-async def watch_start():
+async def watch_start(request: Request):
+    if not _authorize(request):
+        return JSONResponse(content={"error": "unauthorized"}, status_code=401)
     start_screen_recording()
     return Response(content=json.dumps({"ok": True, "active": True}, ensure_ascii=False),
                     status_code=200, media_type="application/json")
 
 @app.post("/watch/stop")
-async def watch_stop():
+async def watch_stop(request: Request):
+    if not _authorize(request):
+        return JSONResponse(content={"error": "unauthorized"}, status_code=401)
     ans = stop_screen_recording_and_analyze()
     return Response(content=json.dumps({"ok": True, "active": False, "response": ans}, ensure_ascii=False),
                     status_code=200, media_type="application/json")
 
 @app.get("/watch/status")
-async def watch_status():
+async def watch_status(request: Request):
+    if not _authorize(request):
+        return JSONResponse(content={"error": "unauthorized"}, status_code=401)
     return Response(
         content=json.dumps({"active": record_state["active"], "hint": "", "updated": 0}, ensure_ascii=False),
         status_code=200,
@@ -745,6 +982,11 @@ def _call_anthropic(messages):
 
 @app.post("/chat")
 async def chat_endpoint(request: Request):
+    if not _authorize(request):
+        return JSONResponse(content={"error": "unauthorized"}, status_code=401)
+    if _rate_limited(request):
+        return JSONResponse(content={"error": "rate_limited", "message": "Too many requests. Try again in a minute."},
+                            status_code=429)
     provider = current_provider
     model_name = current_model
     try:
@@ -823,47 +1065,67 @@ async def chat_endpoint(request: Request):
 
             function_call = None
             tool_id = ""
-            name = ""
+            tool_name = ""
             for pt in parts:
                 if pt.get("type") == "tool_use":
                     function_call = pt.get("input", {})
                     tool_id = pt.get("id", "")
-                    name = pt.get("name", "run_bash")
-                    if name == "run_bash":
+                    tool_name = pt.get("name", "run_bash")
+                    if tool_name == "run_bash":
                         break
                 elif "functionCall" in pt and pt["functionCall"].get("name") == "run_bash":
                     function_call = pt["functionCall"].get("args", {})
-                    name = "run_bash"
+                    tool_name = "run_bash"
                     break
 
-            if name == "run_bash" and function_call is not None:
+            if tool_name == "run_bash" and function_call is not None:
                 cmd = function_call.get("command", "")
-                print(f"🔧 [EXEC]: {cmd}")
-                exec_result = run_bash_execution(cmd)
-                misty_part = {"type": "tool_result",
-                              "tool_use_id": tool_id,
-                              "name": "run_bash",
-                              "content": exec_result}
-                if provider == "gemini":
-                    misty_part = {"functionResponse": {"name": "run_bash",
-                                                       "response": {"result": exec_result}}}
-                hist.append({"role": "user", "parts": [misty_part]})
+                if _command_ok_by_pattern(cmd):
+                    # Auto-approved command (matches a saved allow-pattern).
+                    print(f"🔧 [EXEC]: {cmd}")
+                    exec_result = run_bash_execution(cmd)
+                    hist.append({"role": "user", "parts": [_result_part(provider, tool_id, exec_result)]})
+                    _save_sessions()
+                    tool_name = ""
+                    continue
+                # Command needs user confirmation — stop the loop and let the
+                # client show a modal, then confirm via /tool/confirm.
+                _expire_pending()
+                dangerous = _is_dangerous(cmd)
+                sid = a_sess["id"]
+                with _pending_lock:
+                    _pending_confirm[tool_id] = {
+                        "ts": time.time(), "resolved": None, "command": cmd,
+                        "session_id": sid, "provider": provider, "model": model_name,
+                    }
                 _save_sessions()
-                name = ""
-            else:
-                final_text = clean_response_text("".join(
-                    pt.get("text", "") for pt in parts if pt.get("type") == "text"
-                ))
-                if not final_text:
-                    final_text = clean_response_text(parts[0].get("text", "")) if parts and "text" in parts[0] else ""
-                if RECORD_TRIGGER_RE.search(user_message or ""):
-                    final_text += "\n\n👁 Включаю просмотр вашего экрана — подсказки будут появляться здесь. Остановить можно кнопкой сверху."
-                    start_screen_recording(user_message)
+                print(f"⏳ [PENDING]: {cmd}")
                 return Response(
-                    content=json.dumps({"response": final_text}, ensure_ascii=False),
+                    content=json.dumps({
+                        "pending": True,
+                        "tool_call_id": tool_id,
+                        "command": cmd,
+                        "dangerous": dangerous,
+                        "session_id": sid,
+                        "provider": provider,
+                        "model": model_name,
+                    }, ensure_ascii=False),
                     status_code=200,
                     media_type="application/json; charset=utf-8"
                 )
+            final_text = clean_response_text("".join(
+                pt.get("text", "") for pt in parts if pt.get("type") == "text"
+            ))
+            if not final_text:
+                final_text = clean_response_text(parts[0].get("text", "")) if parts and "text" in parts[0] else ""
+            if RECORD_TRIGGER_RE.search(user_message or ""):
+                final_text += "\n\n👁 Включаю просмотр вашего экрана — подсказки будут появляться здесь. Остановить можно кнопкой сверху."
+                start_screen_recording(user_message)
+            return Response(
+                content=json.dumps({"response": final_text}, ensure_ascii=False),
+                status_code=200,
+                media_type="application/json; charset=utf-8"
+            )
 
         return Response(
             content=json.dumps({"error": "Request processing iteration count exceeded."}, ensure_ascii=False),
@@ -874,14 +1136,166 @@ async def chat_endpoint(request: Request):
     except Exception as e:
         print(f"\n[ERROR]: {e}\n")
         return Response(
-            content=json.dumps({"error": str(e)}, ensure_ascii=False),
+            content=json.dumps({"error": "Internal server error. Check daemon logs."}, ensure_ascii=False),
             status_code=200,
             media_type="application/json; charset=utf-8"
         )
 
 
+@app.post("/tool/confirm")
+async def tool_confirm(request: Request):
+    """Resolve a pending run_bash confirmation.
+
+    Body: {"tool_call_id": "...", "decision": "allow"|"deny"|"never"}
+    """
+    if not _authorize(request):
+        return JSONResponse(content={"error": "unauthorized"}, status_code=401)
+    try:
+        raw = await request.body()
+        data = json.loads(raw.decode("utf-8", errors="replace"))
+    except Exception:
+        return JSONResponse(content={"error": "Invalid JSON body"}, status_code=400)
+
+    tool_call_id = data.get("tool_call_id") or ""
+    decision = data.get("decision") or ""
+    if decision not in ("allow", "deny", "never"):
+        return JSONResponse(
+            content={"error": 'decision must be one of "allow", "deny", "never"'},
+            status_code=400)
+    if not tool_call_id:
+        return JSONResponse(content={"error": "tool_call_id is required"}, status_code=400)
+
+    _expire_pending()
+    with _pending_lock:
+        pend = _pending_confirm.get(tool_call_id)
+    if not pend:
+        return JSONResponse(
+            content={"error": "No pending confirmation for this tool call, or it already expired."},
+            status_code=404)
+    if pend.get("resolved") is not None:
+        return JSONResponse(
+            content={"error": "This confirmation was already resolved."},
+            status_code=409)
+    with _pending_lock:
+        pend["resolved"] = decision
+
+    cmd = pend.get("command", "")
+    provider = pend.get("provider") or current_provider
+    model_name = pend.get("model") or current_model
+    sid = pend.get("session_id") or _store.get("active_id")
+
+    # find session
+    sess = None
+    for s in _store.get("sessions", []):
+        if s["id"] == sid:
+            sess = s
+            break
+    if sess is None:
+        sess = _active()
+    hist = sess["messages"]
+
+    if decision == "deny":
+        print(f"⛔ [DENIED] by user: {cmd}")
+        hist.append({"role": "user", "parts": [
+            _result_part(provider, tool_call_id,
+                         "Пользователь отклонил выполнение команды. Объясни это пользователю и не выполняй команду." )]})
+    else:
+        if decision == "never":
+            _grant_pattern(cmd)
+        print(f"🔧 [EXEC]: {cmd}")
+        exec_result = run_bash_execution(cmd)
+        hist.append({"role": "user", "parts": [_result_part(provider, tool_call_id, exec_result)]})
+    _save_sessions()
+
+    # Continue the model loop after the tool result.
+    for _ in range(10):
+        if provider == "anthropic":
+            parts, err, um = _call_anthropic(hist)
+        else:
+            parts, err, um = _call_gemini(hist)
+        if err:
+            if hist and hist[-1].get("role") == "user":
+                hist.pop()
+            return JSONResponse(content={"error": "Model call failed", "detail": "See daemon logs"},
+                                status_code=502)
+        hist.append({"role": "assistant", "parts": parts})
+        sess["updated"] = _now_ts()
+        _save_sessions()
+        _record_round(model_name, provider)
+        in_t, out_t = _track_usage_tokens(provider, um)
+        usage["quota_exceeded"] = False
+        usage["last_error"] = ""
+        bm = usage["by_model"].setdefault(model_name, {})
+        if isinstance(bm, dict):
+            bm["prompt_tokens"] = bm.get("prompt_tokens", 0) + in_t
+            bm["output_tokens"] = bm.get("output_tokens", 0) + out_t
+        _save_usage()
+
+        # If the model asks for another command, require confirmation again.
+        next_call = None
+        next_id = ""
+        next_name = ""
+        for pt in parts:
+            if pt.get("type") == "tool_use":
+                next_call = pt.get("input", {})
+                next_id = pt.get("id", "")
+                next_name = pt.get("name", "run_bash")
+                if next_name == "run_bash":
+                    break
+            elif "functionCall" in pt and pt["functionCall"].get("name") == "run_bash":
+                next_call = pt["functionCall"].get("args", {})
+                next_name = "run_bash"
+                break
+
+        if next_name == "run_bash" and next_call is not None:
+            ncmd = next_call.get("command", "")
+            if _command_ok_by_pattern(ncmd):
+                print(f"🔧 [EXEC]: {ncmd}")
+                nres = run_bash_execution(ncmd)
+                hist.append({"role": "user", "parts": [_result_part(provider, next_id, nres)]})
+                _save_sessions()
+                continue
+            _expire_pending()
+            ndanger = _is_dangerous(ncmd)
+            n_sid = sess.get("id") or sid
+            with _pending_lock:
+                _pending_confirm[next_id] = {
+                    "ts": time.time(), "resolved": None, "command": ncmd,
+                    "session_id": n_sid, "provider": provider, "model": model_name,
+                }
+            _save_sessions()
+            print(f"⏳ [PENDING]: {ncmd}")
+            return JSONResponse(content={
+                "pending": True,
+                "tool_call_id": next_id,
+                "command": ncmd,
+                "dangerous": ndanger,
+                "session_id": n_sid,
+                "provider": provider,
+                "model": model_name,
+            }, status_code=200)
+
+        final_text = clean_response_text("".join(
+            pt.get("text", "") for pt in parts if pt.get("type") == "text"
+        ))
+        if not final_text:
+            final_text = clean_response_text(parts[0].get("text", "")) if parts and "text" in parts[0] else ""
+        return JSONResponse(content={"response": final_text}, status_code=200)
+
+    return JSONResponse(content={"error": "Request processing iteration count exceeded."}, status_code=200)
+
+
+def _result_part(provider: str, tool_id: str, content: str):
+    """Provider-correct tool_result part for the history."""
+    if provider == "gemini":
+        return {"functionResponse": {"name": "run_bash", "response": {"result": content}}}
+    return {"type": "tool_result", "tool_use_id": tool_id, "name": "run_bash", "content": content}
+
+
 @app.get("/providers")
-async def list_providers():
+async def list_providers(request: Request):
+    if not _authorize(request):
+        return JSONResponse(content={"error": "unauthorized"}, status_code=401)
     out = []
     for p in PROVIDERS:
         out.append({
@@ -905,6 +1319,8 @@ async def list_providers():
 
 @app.post("/provider")
 async def set_provider(request: Request):
+    if not _authorize(request):
+        return JSONResponse(content={"error": "unauthorized"}, status_code=401)
     global current_provider, current_model
     try:
         body = await request.json()
@@ -923,7 +1339,9 @@ async def set_provider(request: Request):
                     status_code=400, media_type="application/json")
 
 @app.get("/models")
-async def list_models():
+async def list_models(request: Request):
+    if not _authorize(request):
+        return JSONResponse(content={"error": "unauthorized"}, status_code=401)
     pdef = _provider_def()
     models = []
     if current_provider == "anthropic":
@@ -948,12 +1366,16 @@ async def list_models():
                     status_code=200, media_type="application/json")
 
 @app.get("/model")
-async def get_model():
+async def get_model(request: Request):
+    if not _authorize(request):
+        return JSONResponse(content={"error": "unauthorized"}, status_code=401)
     return Response(content=json.dumps({"model": current_model}, ensure_ascii=False),
                     status_code=200, media_type="application/json")
 
 @app.post("/model")
 async def set_model(request: Request):
+    if not _authorize(request):
+        return JSONResponse(content={"error": "unauthorized"}, status_code=401)
     global current_model
     try:
         body = await request.json()
@@ -970,7 +1392,9 @@ async def set_model(request: Request):
                     status_code=400, media_type="application/json")
 
 @app.get("/quota")
-async def get_quota():
+async def get_quota(request: Request):
+    if not _authorize(request):
+        return JSONResponse(content={"error": "unauthorized"}, status_code=401)
     q = json.loads(json.dumps(usage))
     limits = q.get("limits", {})
     last_err = q.get("last_error", "") or ""
@@ -1006,12 +1430,16 @@ async def get_quota():
                     status_code=200, media_type="application/json")
 
 @app.get("/history")
-async def get_history():
+async def get_history(request: Request):
+    if not _authorize(request):
+        return JSONResponse(content={"error": "unauthorized"}, status_code=401)
     return Response(content=json.dumps({"history": _active()["messages"]}, ensure_ascii=False),
                     status_code=200, media_type="application/json")
 
 @app.post("/clear")
-async def clear_history():
+async def clear_history(request: Request):
+    if not _authorize(request):
+        return JSONResponse(content={"error": "unauthorized"}, status_code=401)
     a_sess = _active()
     a_sess["messages"] = []
     a_sess["title"] = ""
@@ -1020,14 +1448,18 @@ async def clear_history():
                     status_code=200, media_type="application/json")
 
 @app.get("/sessions")
-async def get_sessions():
+async def get_sessions(request: Request):
+    if not _authorize(request):
+        return JSONResponse(content={"error": "unauthorized"}, status_code=401)
     sessions_meta = [{"id": s["id"], "title": s["title"] or "New chat", "updated": s.get("updated", 0)}
                      for s in _store["sessions"]]
     return Response(content=json.dumps({"sessions": sessions_meta, "active_id": _store["active_id"]}, ensure_ascii=False),
                     status_code=200, media_type="application/json")
 
 @app.post("/session/new")
-async def new_session():
+async def new_session(request: Request):
+    if not _authorize(request):
+        return JSONResponse(content={"error": "unauthorized"}, status_code=401)
     new_s = {"id": str(_now_ts()), "title": "New chat", "updated": _now_ts(), "messages": []}
     _store["sessions"].insert(0, new_s)
     _store["active_id"] = new_s["id"]
@@ -1037,6 +1469,8 @@ async def new_session():
 
 @app.post("/session/select")
 async def select_session(request: Request):
+    if not _authorize(request):
+        return JSONResponse(content={"error": "unauthorized"}, status_code=401)
     body = await request.json()
     sid = body.get("id")
     if any(s["id"] == sid for s in _store["sessions"]):
@@ -1049,6 +1483,8 @@ async def select_session(request: Request):
 
 @app.post("/session/rename")
 async def rename_session(request: Request):
+    if not _authorize(request):
+        return JSONResponse(content={"error": "unauthorized"}, status_code=401)
     body = await request.json()
     sid = body.get("id")
     title = (body.get("title") or "").strip()
@@ -1063,6 +1499,8 @@ async def rename_session(request: Request):
 
 @app.post("/session/delete")
 async def delete_session(request: Request):
+    if not _authorize(request):
+        return JSONResponse(content={"error": "unauthorized"}, status_code=401)
     body = await request.json()
     sid = body.get("id")
     sessions = _store["sessions"]
@@ -1078,7 +1516,9 @@ async def delete_session(request: Request):
                     status_code=200, media_type="application/json")
 
 @app.post("/clipboard_image")
-async def clipboard_image():
+async def clipboard_image(request: Request):
+    if not _authorize(request):
+        return JSONResponse(content={"error": "unauthorized"}, status_code=401)
     env = _user_env()
     r = subprocess.run([shutil.which("wl-paste") or "wl-paste", "--type", "image/png"],
                        capture_output=True, timeout=5, env=env)
@@ -1091,28 +1531,37 @@ async def clipboard_image():
 
 @app.post("/read_file")
 async def read_file(request: Request):
+    if not _authorize(request):
+        return JSONResponse(content={"error": "unauthorized"}, status_code=401)
     body = await request.json()
     fpath = body.get("path")
-    if not fpath or not os.path.exists(fpath):
+    allowed_path = _allowed_read_path(fpath)
+    if not allowed_path:
+        return Response(content=json.dumps({"error": "forbidden", "message": "Path is outside the allowed area."},
+                                            ensure_ascii=False),
+                        status_code=403, media_type="application/json")
+    if not os.path.exists(allowed_path):
         return Response(content=json.dumps({"error": "not_found"}, ensure_ascii=False),
                         status_code=404, media_type="application/json")
     mime = "application/octet-stream"
-    if fpath.endswith((".png", ".PNG")): mime = "image/png"
-    elif fpath.endswith((".jpg", ".jpeg")): mime = "image/jpeg"
-    elif fpath.endswith((".webp",)): mime = "image/webp"
-    elif fpath.endswith((".txt", ".py", ".qml", ".js", ".json", ".md")): mime = "text/plain"
+    if allowed_path.endswith((".png", ".PNG")): mime = "image/png"
+    elif allowed_path.endswith((".jpg", ".jpeg")): mime = "image/jpeg"
+    elif allowed_path.endswith((".webp",)): mime = "image/webp"
+    elif allowed_path.endswith((".txt", ".py", ".qml", ".js", ".json", ".md")): mime = "text/plain"
     try:
-        with open(fpath, "rb") as f:
+        with open(allowed_path, "rb") as f:
             raw = f.read()
         b64 = base64.b64encode(raw).decode()
-        return Response(content=json.dumps({"mime": mime, "data": b64, "filename": os.path.basename(fpath)}, ensure_ascii=False),
+        return Response(content=json.dumps({"mime": mime, "data": b64, "filename": os.path.basename(allowed_path)}, ensure_ascii=False),
                         status_code=200, media_type="application/json")
-    except Exception as e:
-        return Response(content=json.dumps({"error": str(e)}, ensure_ascii=False),
+    except Exception:
+        return Response(content=json.dumps({"error": "read_failed"}, ensure_ascii=False),
                         status_code=500, media_type="application/json")
 
 @app.post("/pick_file")
-async def pick_file():
+async def pick_file(request: Request):
+    if not _authorize(request):
+        return JSONResponse(content={"error": "unauthorized"}, status_code=401)
     env = _user_env()
     zenity_bin = ZENITY
     try:
@@ -1135,12 +1584,14 @@ async def pick_file():
         b64 = base64.b64encode(raw).decode()
         return Response(content=json.dumps({"mime": mime, "data": b64, "filename": os.path.basename(path)}, ensure_ascii=False),
                         status_code=200, media_type="application/json")
-    except Exception as e:
-        return Response(content=json.dumps({"error": str(e)}, ensure_ascii=False),
+    except Exception:
+        return Response(content=json.dumps({"error": "read_failed"}, ensure_ascii=False),
                         status_code=500, media_type="application/json")
 
 @app.get("/settings")
-async def get_settings():
+async def get_settings(request: Request):
+    if not _authorize(request):
+        return JSONResponse(content={"error": "unauthorized"}, status_code=401)
     glow = {**GLOW_DEFAULTS, **(_config.get("glow", {}) or {})}
     if not glow.get("gradient"):
         glow["gradient"] = _provider_def()["gradient"]
@@ -1154,10 +1605,35 @@ async def get_settings():
         "glow": glow
     }, ensure_ascii=False), status_code=200, media_type="application/json")
 
+def _valid_https_url(url: str, allowed_host: str) -> bool:
+    """Return True when url is an https URL pointing at the given host."""
+    try:
+        if not url or not isinstance(url, str):
+            return False
+        p = urlparse(url)
+        return p.scheme == "https" and (p.hostname or "").lower() == allowed_host and bool(p.netloc)
+    except Exception:
+        return False
+
 @app.put("/settings")
 async def update_settings(request: Request):
+    if not _authorize(request):
+        return JSONResponse(content={"error": "unauthorized"}, status_code=401)
     global SYSTEM_INSTRUCTION, WORKER_URL, ANTHROPIC_URL
     data = await request.json()
+
+    # worker_url is fixed at startup from config.json / env and must not be
+    # switched to an attacker-supplied URL through the API.
+    if "worker_url" in data:
+        return Response(content=json.dumps(
+            {"error": "worker_url cannot be changed via the API; edit ~/.config/prism/config.json instead"},
+            ensure_ascii=False), status_code=400, media_type="application/json")
+    if "anthropic_url" in data:
+        new_url = (data.get("anthropic_url") or "").strip()
+        if new_url and not _valid_https_url(new_url, "api.anthropic.com"):
+            return Response(content=json.dumps(
+                {"error": "anthropic_url must be an https URL on api.anthropic.com"},
+                ensure_ascii=False), status_code=400, media_type="application/json")
 
     # Security: the key is stored ONLY in the OS keyring, never flushed to disk.
     if "api_key" in data:
@@ -1169,11 +1645,8 @@ async def update_settings(request: Request):
             _keyring_delete(current_provider)
             PROVIDER_KEYS[current_provider] = os.environ.get(
                 "ANTHROPIC_API_KEY" if current_provider == "anthropic" else "GEMINI_API_KEY", "")
-    if "worker_url" in data:
-        WORKER_URL = data["worker_url"] or WORKER_URL
-        _config["worker_url"] = WORKER_URL
-    if "anthropic_url" in data:
-        ANTHROPIC_URL = data["anthropic_url"] or ANTHROPIC_URL
+    if "anthropic_url" in data and data["anthropic_url"]:
+        ANTHROPIC_URL = data["anthropic_url"].strip()
         _config["anthropic_url"] = ANTHROPIC_URL
     if "system_instruction" in data:
         SYSTEM_INSTRUCTION = data["system_instruction"] if data["system_instruction"] is not None else SYSTEM_INSTRUCTION
@@ -1189,6 +1662,8 @@ async def update_settings(request: Request):
 
 @app.post("/settings/validate")
 async def validate_settings(request: Request):
+    if not _authorize(request):
+        return JSONResponse(content={"error": "unauthorized"}, status_code=401)
     data = await request.json()
     key = data.get("api_key", _api_key())
     pdef = _provider_def()
@@ -1209,8 +1684,8 @@ async def validate_settings(request: Request):
                                 status_code=200, media_type="application/json")
             return Response(content=json.dumps({"valid": False, "error": f"HTTP {r.status_code}"}, ensure_ascii=False),
                             status_code=200, media_type="application/json")
-    except Exception as e:
-        return Response(content=json.dumps({"valid": False, "error": str(e)}, ensure_ascii=False),
+    except Exception:
+        return Response(content=json.dumps({"valid": False, "error": "Validation failed (network error). See daemon logs."}, ensure_ascii=False),
                         status_code=200, media_type="application/json")
 
 if __name__ == "__main__":
