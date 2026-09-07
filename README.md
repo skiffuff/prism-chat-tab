@@ -13,8 +13,7 @@ backed by a lightweight local FastAPI daemon. Works with **Google Gemini** and
 curl -fsSL https://raw.githubusercontent.com/skiffuff/prism-chat-tab/main/install.sh | bash
 ```
 
-Then set your API key and start the daemon:
-
+Then:
 ```bash
 export GEMINI_API_KEY=your_key      # or ANTHROPIC_API_KEY=...
 ~/.local/share/prism/venv/bin/python ~/.local/share/prism/prism_daemon.py
@@ -26,53 +25,37 @@ The tab will appear in the Caelestia dashboard after a restart.
 
 ## Features
 
-### Tab (PrismTab.qml)
+**Tab (PrismTab.qml)**
+- Collapsible sidebar with smooth width animation
+- Multiple chat sessions with auto-title (20 chars)
+- Daemon health indicator (green/red dot, 10s poll)
+- Exec message styling (monospace, dark bg, yellow border)
+- Timestamps on every message
 
-| Feature | Description |
-|---------|-------------|
-| **Collapsible sidebar** | Toggle between full and compact (icon-only) mode with smooth width animation. |
-| **Multiple chat sessions** | Create, switch between, rename and delete independent conversations. |
-| **Auto-title** | New chats are automatically named after the user's first message (truncated to 20 chars). |
-| **Smooth animations** | Each new message fades in and slides up with a cubic ease-out curve. |
-| **Daemon health indicator** | Pulsing green dot when daemon is reachable, red when offline. Polls every 10 seconds. |
-| **Exec message styling** | Shell commands rendered in monospace with dark background and yellow border. |
-| **Timestamps** | Every message carries a human-readable timestamp. |
-
-### Daemon (backend/prism_daemon.py)
-
-| Feature | Description |
-|---------|-------------|
-| **Multi-provider** | Switch between Google Gemini and Claude at any time via the API. |
-| **Direct API or Cloudflare worker** | Requests go directly to Gemini/Cloudflare unless Google is geo-blocked. |
-| **`run_bash` tool** | AI can execute shell commands, interact with clipboard, read/open files. |
-| **Screen recording & analysis** | "what is on my screen" starts video capture (wf-recorder/ffmpeg) and analyzes it. |
-| **Clipboard image** | Paste an image from Wayland clipboard; daemon sends it to the model. |
-| **File picker** | Native file dialog (`zenity`) to attach local files to messages. |
-| **`/read_file` endpoint** | AI can read any file on your system. |
-| **Session persistence** | All sessions saved to `~/.local/share/prism/sessions.json`. |
-| **Usage & quota tracking** | Request count, prompt/output tokens, daily limits per model. |
-| **Configurable glow** | Decorative ring animation controlled via `glow` settings in config. |
-| **Configurable system instruction** | Full control over AI behaviour via `system_instruction` in config. |
-| **OS keyring** | API keys stored only in SecretStorage/GNOME Keyring, never written to disk. |
+**Daemon (backend/prism_daemon.py)**
+- Multi-provider: Google Gemini and Claude
+- Direct API or Cloudflare worker routing
+- `run_bash` tool for shell commands
+- Screen recording & analysis (wf-recorder/ffmpeg)
+- Clipboard image support (Wayland)
+- File picker via zenity
+- `/read_file` endpoint
+- Session persistence (sessions.json)
+- Usage & quota tracking (usage.json)
+- Configurable glow effect
+- Configurable system instruction
+- OS keyring for API keys (SecretStorage / GNOME Keyring)
 
 ## Configuration
 
-Config file: `~/.config/prism/config.json`
-
+`~/.config/prism/config.json`:
 ```json
 {
   "provider": "gemini",
   "model": "gemini-3.6-flash",
   "worker_url": "https://your-worker.example.com",
-  "anthropic_url": "https://api.anthropic.com",
   "system_instruction": "You are a helpful assistant...",
-  "glow": {
-    "enabled": true,
-    "ring_count": 96,
-    "sigma": 28,
-    "alpha": 0.42,
-    "gradient": null
-  }
+  "glow": { "enabled": true, "ring_count": 96, "sigma": 28 }
 }
 ```
 
@@ -80,68 +63,46 @@ Config file: `~/.config/prism/config.json`
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/health` | GET | Daemon health check |
-| `/providers` | GET | List available providers |
-| `/provider` | POST | Set active provider |
-| `/models` | GET | List models for current provider |
-| `/model` | POST | Set active model |
-| `/chat` | POST | Send message and get response |
-| `/tool/confirm` | POST | Confirm/deny a pending tool execution |
-| `/quota` | GET | Usage and quota status |
-| `/history` | GET | Chat history for active session |
-| `/sessions` | GET | List all sessions |
-| `/session/new` | POST | Create new session |
-| `/session/select` | POST | Switch to session |
+| `/health` | GET | Health check |
+| `/providers` | GET | List providers |
+| `/provider` | POST | Set provider |
+| `/models` | GET | List models |
+| `/model` | POST | Set model |
+| `/chat` | POST | Send message |
+| `/tool/confirm` | POST | Confirm tool execution |
+| `/quota` | GET | Usage & quota |
+| `/history` | GET | Chat history |
+| `/sessions` | GET | List sessions |
+| `/session/new` | POST | Create session |
+| `/session/select` | POST | Switch session |
 | `/session/rename` | POST | Rename session |
 | `/session/delete` | POST | Delete session |
-| `/watch/start` | POST | Start screen recording |
-| `/watch/stop` | POST | Stop screen recording and analyze |
-| `/watch/status` | GET | Screen recording status |
-| `/clipboard_image` | POST | Get clipboard image (Wayland) |
-| `/read_file` | POST | Read a file from system |
-| `/pick_file` | POST | Open file picker dialog |
-| `/settings` | GET | Get daemon settings |
+| `/watch/start` | POST | Start recording |
+| `/watch/stop` | POST | Stop recording |
+| `/watch/status` | GET | Recording status |
+| `/clipboard_image` | POST | Get clipboard image |
+| `/read_file` | POST | Read a file |
+| `/pick_file` | POST | Open file picker |
+| `/settings` | GET | Get settings |
 | `/settings/validate` | POST | Validate API key |
 
 ## Security
 
-API keys are stored only in the OS keyring (SecretStorage / GNOME Keyring)
-and never written to `config.json`. A `GEMINI_API_KEY` / `ANTHROPIC_API_KEY`
-environment variable fallback is also supported.
+API keys stored only in OS keyring (never written to disk).
 
-### Security Features
-
-| Feature | Description |
-|---------|-------------|
-| **Command injection prevention** | `run_bash` uses `subprocess.run()` with `shell=False`. Commands are parsed via `shlex.split()` and validated against a restrictive whitelist (no python, node, curl, docker, kubectl, sudo, ssh, etc.). |
-| **Dangerous command detection** | `_is_dangerous()` blocks: base64 decode, process substitution (`<(...)`, `>(...)`), command substitution (`$(...)`, backticks), shell metacharacters (`;`, `&`, `|`), and other patterns. |
-| **SSRF protection** | `_valid_https_url()` validates URLs and rejects trailing dots to prevent subdomain takeover via DNS rebinding. |
-| **Path traversal protection** | `_allowed_read_path()` uses `os.path.abspath()` instead of `realpath()` to prevent symlink-based path traversal. File access is restricted to user's home directory. |
-| **Auth token** | All API endpoints require `X-Prism-Token` header with a random token stored in `~/.local/share/prism/daemon.token`. |
-| **Rate limiting** | 10 requests per minute per client IP (configurable via `RATE_LIMIT_WINDOW` and `RATE_LIMIT_MAX`). |
-| **No CORS** | Browser CORS preflight requests (OPTIONS) are rejected with 403. QML XHR is not subject to CORS. |
-| **Run_bash confirmation flow** | Dangerous commands require explicit user confirmation before execution. Auto-approval only for commands matching user-saved allow-patterns. |
-
-### Security Hardening History
-
-| Date | Fix | Severity |
-|------|-----|----------|
-| 2026-09-07 | Removed dangerous commands from `allowed_commands` whitelist | HIGH |
-| 2026-09-07 | Improved `_is_dangerous()` pattern matching | MEDIUM |
-| 2026-09-07 | Added trailing dot validation in `_valid_https_url()` | MEDIUM |
-| 2026-09-07 | Fixed `_allowed_read_path()` for symlink protection | MEDIUM |
-| 2026-09-07 | Updated DANGEROUS_PATTERNS with word boundaries | LOW |
+**Security features:**
+- `run_bash` uses `shell=False` with restrictive command whitelist (no python, node, curl, docker, etc.)
+- `_is_dangerous()` blocks: base64 decode, process substitution, command substitution, shell metacharacters
+- `_valid_https_url()` rejects trailing dots (SSRF protection)
+- `_allowed_read_path()` uses `abspath()` (path traversal protection)
+- All endpoints require `X-Prism-Token` header
+- Rate limiting: 10 requests/minute per IP
+- No CORS (OPTIONS rejected with 403)
 
 ## Troubleshooting
 
-**Daemon won't start:**
-- Ensure `~/.local/share/prism/venv/bin/python` exists
-- Check Python dependencies: `pip install fastapi uvicorn requests secretstorage`
+**Daemon won't start:** Check `~/.local/share/prism/venv/bin/python` exists, install deps: `pip install fastapi uvicorn requests secretstorage`
 
-**No API key error:**
-- Set `GEMINI_API_KEY` or `ANTHROPIC_API_KEY` environment variable
-- Or add key via daemon settings API
+**No API key:** Set `GEMINI_API_KEY` or `ANTHROPIC_API_KEY`, or add via daemon settings API
 
-**Screen recording not working:**
-- Install `wf-recorder` (Wayland) or `ffmpeg`
-- Verify the daemon can access the display: `export DISPLAY=:0`
+**Screen recording not working:** Install `wf-recorder` (Wayland) or `ffmpeg`, verify `export DISPLAY=:0`
