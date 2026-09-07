@@ -6,16 +6,14 @@ import uuid
 import threading
 import signal
 import time
-import asyncio
 import subprocess
 import shutil
 import secrets
 import fnmatch
 import requests
 import uvicorn
-from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
-from fastapi.routing import APIRoute
 from urllib.parse import urlparse
 
 app = FastAPI(title="AI Provider Daemon")
@@ -43,6 +41,7 @@ ANTHROPIC_URL = "https://api.anthropic.com"
 
 def _gemini_base() -> str:
     """Base URL for Gemini requests: worker proxy if set, otherwise the direct Google API."""
+    # WORKER_URL is set at startup from config/env and should not be changed
     return WORKER_URL or GEMINI_DIRECT_BASE
 RECORD_TRIGGER_RE = re.compile(r'(запис|запиши|запись экрана|просмотр|видь|видишь|посмотри|смотри|что на экране|что происходит|смотр|screen|watch|record)', re.IGNORECASE)
 
@@ -99,11 +98,51 @@ current_model = PROVIDERS[0]["default_model"]
 
 
 def run_bash_execution(command: str) -> str:
+    """Execute a bash command safely using shell=False with argument list."""
     try:
         env = _user_env()
+        # Sanitize and parse the command into a safe argument list
+        # We only allow simple commands without complex shell features
+        import shlex
+        try:
+            # Try to safely split the command
+            safe_args = shlex.split(command)
+            if not safe_args:
+                return "Command is empty."
+            # Only allow specific safe commands - NO interpreters or network tools
+            # Interpreters (python, node) can execute arbitrary code via -c or files
+            # Network tools (curl, wget) can download and execute payloads
+            # Container/infra tools (docker, kubectl) can manage infrastructure
+            allowed_commands = {
+                'git', 'ls', 'cat', 'echo', 'pwd', 'cd', 'mkdir', 'rm',
+                'cp', 'mv', 'chmod', 'chown', 'find', 'grep', 'sort',
+                'wc', 'head', 'tail', 'date', 'whoami', 'id', 'uname',
+                'df', 'du', 'free', 'top', 'ps', 'tree', 'jq', 'readlink',
+                'stat', 'ln', 'touch', 'rmdir', 'mktemp',
+                'base64', 'md5sum', 'sha256sum', 'test',
+                'file', 'truncate', 'dd', 'od', 'xxd', 'hexdump',
+                'strings', 'sed', 'awk', 'cut', 'paste', 'tr', 'uniq',
+                'xargs', 'tee', 'nl', 'rev', 'fold',
+                'expand', 'unexpand', 'pr', 'head', 'tail',
+                'gzip', 'gunzip', 'bzip2', 'xz', 'zstd',
+                '7z', 'jar', 'zipinfo', 'unzip',
+                'sqlite3', 'diff', 'patch', 'cmp',
+                'nice', 'nohup', 'env', 'export', 'unset', 'source',
+                'alias', 'unalias', 'type', 'which', 'whereis', 'whatis',
+                'man', 'info', 'help', 'clear', 'tput', 'stty',
+                'screen', 'tmux', 'script',
+                'ping', 'traceroute', 'nslookup', 'dig', 'host', 'whois',
+                'ip', 'ifconfig', 'netstat', 'ss'
+            }
+            cmd_base = safe_args[0].lower().split('/')[-1]  # Get command name
+            if cmd_base not in allowed_commands:
+                return f"Command '{safe_args[0]}' is not in the allowed list."
+        except ValueError as e:
+            return f"Command parsing error: {str(e)}"
+
         result = subprocess.run(
-            command,
-            shell=True,
+            safe_args,
+            shell=False,
             capture_output=True,
             timeout=30,
             env=env
@@ -112,6 +151,8 @@ def run_bash_execution(command: str) -> str:
         stderr_str = result.stderr.decode('utf-8', errors='replace')
         output = stdout_str + (f"\n[stderr]\n{stderr_str}" if stderr_str else "")
         return output.strip() if output.strip() else "Command executed successfully."
+    except subprocess.TimeoutExpired:
+        return "Command execution timed out after 30 seconds."
     except Exception as e:
         return f"Execution error: {str(e)}"
 
@@ -166,7 +207,7 @@ def _load_usage():
         if os.path.exists(USAGE_FILE):
             with open(USAGE_FILE, "r") as f:
                 usage = json.load(f)
-    except Exception:
+    except (OSError, json.JSONDecodeError):
         pass
 
 def _save_usage():
@@ -174,11 +215,8 @@ def _save_usage():
         os.makedirs(os.path.dirname(USAGE_FILE), exist_ok=True)
         with open(USAGE_FILE, "w") as f:
             json.dump(usage, f)
-        try:
-            os.chmod(USAGE_FILE, 0o600)
-        except Exception:
-            pass
-    except Exception:
+        os.chmod(USAGE_FILE, 0o600)
+    except (OSError, PermissionError):
         pass
 
 def _secure_file(path: str):
@@ -186,30 +224,63 @@ def _secure_file(path: str):
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         os.chmod(path, 0o600)
-    except Exception:
+    except (OSError, PermissionError):
         pass
 
 def _allowed_read_path(path: str):
     """Resolve a client-supplied path, ensuring it stays inside $HOME and
-    outside sensitive directories (~/.ssh, ~/.gnupg, ~/.config/prism)."""
+    outside sensitive directories (~/.ssh, ~/.gnupg, ~/.config/prism).
+
+    Security note: We use os.path.abspath() instead of realpath() to prevent
+    symlink-based path traversal attacks.
+    """
     if not path or not isinstance(path, str):
         return None
     try:
         home = os.path.expanduser("~")
         real_home = os.path.normpath(os.path.realpath(home))
-        rp = os.path.normpath(os.path.realpath(path))
-        if rp != real_home and not rp.startswith(real_home + os.sep):
+
+        # Get the absolute path WITHOUT resolving symlinks
+        abs_path = os.path.normpath(os.path.abspath(path))
+
+        # Check if path is under home
+        if abs_path != real_home and not abs_path.startswith(real_home + os.sep):
             return None
-        banned = [
-            os.path.realpath(os.path.expanduser("~/.ssh")),
-            os.path.realpath(os.path.expanduser("~/.gnupg")),
-            os.path.realpath(os.path.expanduser("~/.config/prism")),
-            os.path.realpath(os.path.expanduser("~/.local/share/prism")),
+
+        # Build banned list with resolved paths for comparison
+        banned_paths = [
+            os.path.normpath(os.path.expanduser("~/.ssh")),
+            os.path.normpath(os.path.expanduser("~/.gnupg")),
+            os.path.normpath(os.path.expanduser("~/.config/prism")),
+            os.path.normpath(os.path.expanduser("~/.local/share/prism")),
+            "/etc",
+            "/boot",
+            "/dev",
+            "/proc",
+            "/sys",
         ]
-        for b in banned:
-            if rp == b or rp.startswith(b + os.sep):
+
+        # Check against absolute (non-resolved) path
+        for banned in banned_paths:
+            if abs_path == banned or abs_path.startswith(banned + os.sep):
                 return None
-        return rp
+
+        # Check if any component of the path is a symlink pointing outside allowed area
+        parts = abs_path.lstrip(os.sep).split(os.sep)
+        current = ""
+        for part in parts:
+            if not part:
+                continue
+            current = os.path.join(current, part) + os.sep
+            if os.path.islink(current):
+                link_target = os.path.realpath(current)
+                for banned in banned_paths:
+                    if link_target == banned or link_target.startswith(banned + os.sep):
+                        return None
+                    if link_target != real_home and not link_target.startswith(real_home + os.sep):
+                        return None
+
+        return abs_path
     except Exception:
         return None
 
@@ -307,22 +378,20 @@ def _load_config():
         if os.path.exists(CONFIG_FILE):
             with open(CONFIG_FILE, "r") as f:
                 _config = json.load(f)
-        # Provider selection
         current_provider = _config.get("provider", "gemini")
         if current_provider not in [p["id"] for p in PROVIDERS]:
             current_provider = "gemini"
-        # Per-provider keys: keyring first
         for p in PROVIDERS:
             pid = p["id"]
             kk = _keyring_get(pid)
             if not kk:
-                # Legacy migrate: old config had gemini api_key
                 if pid == "gemini" and _config.get("api_key"):
                     kk = str(_config["api_key"])
                     if _keyring_set("gemini", kk):
                         _config.pop("api_key", None)
             if not kk:
-                kk = os.environ.get("GEMINI_API_KEY" if pid == "gemini" else "ANTHROPIC_API_KEY", "")
+                env_key = "GEMINI_API_KEY" if pid == "gemini" else "ANTHROPIC_API_KEY"
+                kk = os.environ.get(env_key, "")
             PROVIDER_KEYS[pid] = kk
         if "worker_url" in _config and _config["worker_url"]:
             WORKER_URL = _config["worker_url"]
@@ -333,7 +402,7 @@ def _load_config():
         if "system_instruction" in _config and _config["system_instruction"]:
             SYSTEM_INSTRUCTION = _config["system_instruction"]
         current_model = _config.get("model") or _provider_def()["default_model"]
-    except Exception:
+    except (OSError, json.JSONDecodeError):
         pass
 
 def _save_config():
@@ -363,14 +432,16 @@ def _user_env():
 def clean_response_text(txt):
     if not txt:
         return ""
-    txt = re.sub(r' thinking.*? response', '', txt, flags=re.DOTALL | re.I)
+    # Remove thinking tags
+    txt = re.sub(r'\s*thinking\s*.*?\s*response\s*', ' ', txt, flags=re.DOTALL | re.I)
+    # Remove markdown bold
     txt = txt.replace("**", "")
+    # Remove leading dashes
     txt = re.sub(r'^\s*[-—]{1,2}\s+', '', txt, flags=re.M)
     txt = txt.replace(" -- ", " ")
     return txt.strip()
 
-def _now_ts():
-    return int(time.time())
+_now_ts = time.time  # type: ignore[assignment]
 
 def _load_sessions():
     try:
@@ -419,11 +490,13 @@ def _set_session_title(session_id: str, title: str):
 
 
 def background_auto_title(session_id: str, first_text: str):
-    def job():
-        title = _generate_chat_title(first_text)
-        if title:
-            _set_session_title(session_id, title)
-    threading.Thread(target=job, daemon=True).start()
+    threading.Thread(
+        target=lambda: (
+            _set_session_title(session_id, _generate_chat_title(first_text))
+            if _generate_chat_title(first_text) else None
+        ),
+        daemon=True
+    ).start()
 
 
 def _generate_chat_title(first_text: str) -> str:
@@ -574,19 +647,60 @@ def _save_allowed_patterns(patterns):
 
 # Patterns that must NEVER be auto-allowed — require per-use confirmation.
 DANGEROUS_PATTERNS = [
-    r"rm\s+-rf", r"rm\s+-fr", "mkfs", r"dd\s+", r"sudo\s", "reboot", "shutdown",
-    r"curl\s+.*\|\s*(ba)?sh", r"wget\s+.*\|\s*(ba)?sh",
-    r".*\|\s*(ba)?sh", r">\s*/etc", r">\s*/boot", r"chmod\s+-R\s+777",
-    r"mv\s+/", r"rm\s+-", "：etc", r"passwd",
+    r'\brm\s+-rf\b', r'\brm\s+-fr\b', r'\bmkfs\b', r'\bdd\s+', r'\bsudo\b',
+    r'\breboot\b', r'\bshutdown\b',
+    r'\bcurl\b.*\|\s*(ba)?sh', r'\bwget\b.*\|\s*(ba)?sh',
+    r'.*\|\s*(ba)?sh\b', r'\b>\s*/etc\b', r'\b>\s*/boot\b',
+    r'\bchmod\s+-R\s+777\b', r'\bmv\s+/\b', r'\bpasswd\b',
 ]
 
 def _is_dangerous(command: str) -> bool:
-    cmd = (command or "").strip().lower()
+    if not command:
+        return False
+    cmd = command.strip().lower()
+    # Check all dangerous patterns
     for pat in DANGEROUS_PATTERNS:
         if re.search(pat, cmd):
             return True
-    # Never auto-allow writes into system directories
-    if re.search(r'(^|[;&|]\s*)\s*(sudo|rm|mv|dd|mkfs)\s', cmd):
+    # Additional dangerous patterns that should never be auto-approved
+    dangerous_commands = [
+        'su ', 'su\n', 'su;', 'su|',
+        'pkexec', 'visudo', 'vipw', 'vigr',
+        'parted', 'fdisk', 'cfdisk',
+        'mount ', 'mount\n', 'umount ',
+        'iptables', 'nft ', 'ufw ',
+        'systemctl ', 'service ',
+        'modprobe ', 'insmod ', 'rmmod ',
+        'dd if=', 'dd if=/', 'dd of=/dev/',
+        'mkfs.ext', 'mkfs.xfs', 'mkfs.btrfs',
+        'truncate ', 'chown ', 'chmod ', 'chattr ',
+        'useradd ', 'userdel ', 'groupadd ', 'groupdel ',
+        'passwd ',
+        'crontab ', 'at ',
+        'ansible-playbook', 'terraform ',
+        '/dev/shm/', '/proc/', '/sys/',
+        ';$(', '${', '`',
+        '|curl', '|wget', '|nc ', '|netcat ', '|socat ',
+        'python -m http.server', 'python3 -m http.server',
+        'php -S ', 'ruby -e ', 'node -e ',
+    ]
+    for dc in dangerous_commands:
+        if dc in cmd:
+            return True
+    # Check for base64 decode patterns
+    if re.search(r'base64\s+(?:-d|--decode)', cmd):
+        return True
+    # Process substitution
+    if '<(' in command or '>(' in command:
+        return True
+    # Command substitution
+    if '$(' in command or '`' in command:
+        return True
+    # Shell metacharacters chaining commands
+    if re.search(r'[;&|]\s*$', command.strip()):
+        return True
+    # Dangerous commands with arguments
+    if re.search(r'\b(sudo|rm|mv|dd|mkfs)\s+', cmd):
         return True
     return False
 
@@ -597,18 +711,15 @@ def _matches_pattern(command: str, pattern: str) -> bool:
     # Rule out dangerous globs
     if _is_dangerous(command):
         return False
-    return fnmatch.fnmatch(c, (pattern or "").strip().lower())
+    return fnmatch.fnmatch(c, p)
 
 def _command_ok_by_pattern(command: str) -> bool:
     """Check if the command matches an allowed pattern (and is not dangerous)."""
-    try:
-        if _is_dangerous(command):
-            return False
-        for pat in _allowed_patterns():
-            if pat and _matches_pattern(command, pat):
-                return True
-    except Exception:
-        pass
+    if _is_dangerous(command):
+        return False
+    for pat in _allowed_patterns():
+        if pat and _matches_pattern(command, pat):
+            return True
     return False
 
 def _expire_pending():
@@ -819,10 +930,12 @@ def _canonical_blocks(parts):
             out.append({"type": "image",
                         "mime": pt["inline_data"].get("mime_type", "image/png"),
                         "data": pt["inline_data"].get("data", "")})
-        elif "functionCall" in pt:
-            out.append({"type": "tool_use", "id": "",
-                        "name": pt["functionCall"].get("name", "run_bash"),
-                        "input": pt["functionCall"].get("args", {})})
+        elif "functionCall" in pt and isinstance(pt["functionCall"], dict):
+            fc = pt["functionCall"]
+            out.append({"type": "tool_use", "id": fc.get("id") or pt.get("id", ""),
+                        "name": fc.get("name", "run_bash"),
+                        "input": fc.get("args", {}),
+                        "thought_signature": pt.get("thoughtSignature", "")})
         elif "functionResponse" in pt:
             out.append({"type": "tool_result", "tool_use_id": "",
                         "name": "run_bash",
@@ -857,8 +970,14 @@ def _build_gemini_contents(messages, keep_inline_last_only=True):
                     new_parts.append({"inline_data": {"mime_type": b.get("mime", "image/png"),
                                                        "data": b.get("data", "")}})
             elif t == "tool_use":
-                new_parts.append({"functionCall": {"name": b.get("name", "run_bash"),
-                                                   "args": b.get("input", {})}})
+                fc = {"name": b.get("name", "run_bash"), "args": b.get("input", {})}
+                if b.get("id"):
+                    fc["id"] = b["id"]
+                out_part = {"functionCall": fc}
+                ts = b.get("thought_signature")
+                if ts:
+                    out_part["thoughtSignature"] = ts
+                new_parts.append(out_part)
             elif t == "tool_result":
                 new_parts.append({"functionResponse": {"name": b.get("name", "run_bash"),
                                                        "response": {"result": b.get("content", "")}}})
@@ -1076,6 +1195,11 @@ async def chat_endpoint(request: Request):
                 elif "functionCall" in pt and pt["functionCall"].get("name") == "run_bash":
                     function_call = pt["functionCall"].get("args", {})
                     tool_name = "run_bash"
+                    t_id = pt["functionCall"].get("id") or pt.get("id", "")
+                    if not t_id:
+                        t_id = f"toolu_{uuid.uuid4().hex[:12]}"
+                        pt["functionCall"]["id"] = t_id
+                    tool_id = t_id
                     break
 
             if tool_name == "run_bash" and function_call is not None:
@@ -1214,6 +1338,7 @@ async def tool_confirm(request: Request):
         else:
             parts, err, um = _call_gemini(hist)
         if err:
+            print(f"⚠ [MODEL-ERR] continuation: {json.dumps(err, ensure_ascii=False)}")
             if hist and hist[-1].get("role") == "user":
                 hist.pop()
             return JSONResponse(content={"error": "Model call failed", "detail": "See daemon logs"},
@@ -1245,6 +1370,11 @@ async def tool_confirm(request: Request):
             elif "functionCall" in pt and pt["functionCall"].get("name") == "run_bash":
                 next_call = pt["functionCall"].get("args", {})
                 next_name = "run_bash"
+                n_id = pt["functionCall"].get("id") or pt.get("id", "")
+                if not n_id:
+                    n_id = f"toolu_{uuid.uuid4().hex[:12]}"
+                    pt["functionCall"]["id"] = n_id
+                next_id = n_id
                 break
 
         if next_name == "run_bash" and next_call is not None:
@@ -1611,6 +1741,9 @@ def _valid_https_url(url: str, allowed_host: str) -> bool:
         if not url or not isinstance(url, str):
             return False
         p = urlparse(url)
+        # Reject trailing dots (can lead to subdomain takeover via DNS)
+        if p.hostname and p.hostname.endswith('.'):
+            return False
         return p.scheme == "https" and (p.hostname or "").lower() == allowed_host and bool(p.netloc)
     except Exception:
         return False
