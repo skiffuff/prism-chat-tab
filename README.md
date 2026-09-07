@@ -111,12 +111,26 @@ environment variable fallback is also supported.
 
 ### Security Features
 
-- **Command injection prevention** - `run_bash` uses `shell=False` with a restrictive command whitelist
-- **SSRF protection** - URL validation prevents subdomain takeover via DNS rebinding
-- **Path traversal protection** - File access is restricted to user's home directory
-- **Auth token** - All endpoints require `X-Prism-Token` header
-- **Rate limiting** - 10 requests per minute per client IP
-- **No CORS** - Browser CORS preflight requests are rejected (QML XHR is not subject to CORS)
+| Feature | Description |
+|---------|-------------|
+| **Command injection prevention** | `run_bash` uses `subprocess.run()` with `shell=False`. Commands are parsed via `shlex.split()` and validated against a restrictive whitelist (no python, node, curl, docker, kubectl, sudo, ssh, etc.). |
+| **Dangerous command detection** | `_is_dangerous()` blocks: base64 decode, process substitution (`<(...)`, `>(...)`), command substitution (`$(...)`, backticks), shell metacharacters (`;`, `&`, `|`), and other patterns. |
+| **SSRF protection** | `_valid_https_url()` validates URLs and rejects trailing dots to prevent subdomain takeover via DNS rebinding. |
+| **Path traversal protection** | `_allowed_read_path()` uses `os.path.abspath()` instead of `realpath()` to prevent symlink-based path traversal. File access is restricted to user's home directory. |
+| **Auth token** | All API endpoints require `X-Prism-Token` header with a random token stored in `~/.local/share/prism/daemon.token`. |
+| **Rate limiting** | 10 requests per minute per client IP (configurable via `RATE_LIMIT_WINDOW` and `RATE_LIMIT_MAX`). |
+| **No CORS** | Browser CORS preflight requests (OPTIONS) are rejected with 403. QML XHR is not subject to CORS. |
+| **Run_bash confirmation flow** | Dangerous commands require explicit user confirmation before execution. Auto-approval only for commands matching user-saved allow-patterns. |
+
+### Security Hardening History
+
+| Date | Fix | Severity |
+|------|-----|----------|
+| 2026-09-07 | Removed dangerous commands from `allowed_commands` whitelist | HIGH |
+| 2026-09-07 | Improved `_is_dangerous()` pattern matching | MEDIUM |
+| 2026-09-07 | Added trailing dot validation in `_valid_https_url()` | MEDIUM |
+| 2026-09-07 | Fixed `_allowed_read_path()` for symlink protection | MEDIUM |
+| 2026-09-07 | Updated DANGEROUS_PATTERNS with word boundaries | LOW |
 
 ## Troubleshooting
 
