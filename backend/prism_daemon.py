@@ -114,23 +114,21 @@ def run_bash_execution(command: str) -> str:
             # Network tools (curl, wget) can download and execute payloads
             # Container/infra tools (docker, kubectl) can manage infrastructure
             allowed_commands = {
-                'git', 'ls', 'cat', 'echo', 'pwd', 'cd', 'mkdir', 'rm',
-                'cp', 'mv', 'chmod', 'chown', 'find', 'grep', 'sort',
-                'wc', 'head', 'tail', 'date', 'whoami', 'id', 'uname',
+                'git', 'ls', 'echo', 'pwd', 'cd', 'mkdir', 'rm',
+                'cp', 'mv', 'chmod', 'chown', 'sort',
+                'wc', 'date', 'whoami', 'id', 'uname',
                 'df', 'du', 'free', 'top', 'ps', 'tree', 'jq', 'readlink',
                 'stat', 'ln', 'touch', 'rmdir', 'mktemp',
                 'base64', 'md5sum', 'sha256sum', 'test',
                 'file', 'truncate', 'dd', 'od', 'xxd', 'hexdump',
-                'strings', 'sed', 'awk', 'cut', 'paste', 'tr', 'uniq',
-                'xargs', 'tee', 'nl', 'rev', 'fold',
-                'expand', 'unexpand', 'pr', 'head', 'tail',
+                'strings', 'cut', 'paste', 'tr', 'uniq',
+                'tee', 'nl', 'rev', 'fold',
+                'expand', 'unexpand', 'pr',
                 'gzip', 'gunzip', 'bzip2', 'xz', 'zstd',
                 '7z', 'jar', 'zipinfo', 'unzip',
-                'sqlite3', 'diff', 'patch', 'cmp',
-                'nice', 'nohup', 'env', 'export', 'unset', 'source',
-                'alias', 'unalias', 'type', 'which', 'whereis', 'whatis',
+                'diff', 'patch', 'cmp',
+                'export', 'unset', 'alias', 'unalias', 'type', 'which', 'whereis', 'whatis',
                 'man', 'info', 'help', 'clear', 'tput', 'stty',
-                'screen', 'tmux', 'script',
                 'ping', 'traceroute', 'nslookup', 'dig', 'host', 'whois',
                 'ip', 'ifconfig', 'netstat', 'ss'
             }
@@ -149,6 +147,36 @@ def run_bash_execution(command: str) -> str:
         )
         stdout_str = result.stdout.decode('utf-8', errors='replace')
         stderr_str = result.stderr.decode('utf-8', errors='replace')
+
+        # Filter API keys from env command output
+        def _sanitize_env_output(text: str) -> str:
+            """Remove lines containing sensitive patterns from env output."""
+            if not text:
+                return text
+            # Patterns to filter: *_API_KEY, *_TOKEN, SECRET, KEY patterns
+            sensitive_patterns = [
+                r'.*_API_KEY=',
+                r'.*_TOKEN=',
+                r'.*_SECRET=',
+                r'^SECRET',
+                r'^API_KEY',
+                r'^TOKEN',
+                r'^KEY=',
+                r'^KEY$',
+            ]
+            filtered_lines = []
+            for line in text.split('\n'):
+                skip = False
+                for pattern in sensitive_patterns:
+                    if re.search(pattern, line, re.IGNORECASE):
+                        skip = True
+                        break
+                if not skip:
+                    filtered_lines.append(line)
+            return '\n'.join(filtered_lines)
+
+        stdout_str = _sanitize_env_output(stdout_str)
+        stderr_str = _sanitize_env_output(stderr_str)
         output = stdout_str + (f"\n[stderr]\n{stderr_str}" if stderr_str else "")
         return output.strip() if output.strip() else "Command executed successfully."
     except subprocess.TimeoutExpired:
@@ -706,7 +734,7 @@ def _is_dangerous(command: str) -> bool:
 
 def _matches_pattern(command: str, pattern: str) -> bool:
     """fnmatch-style check (git * matches 'git status' but not 'git status | rm -rf')."""
-    p = (pattern or "").strip().rstrip("*").lower()
+    p = (pattern or "").strip().lower()
     c = (command or "").strip().lower()
     # Rule out dangerous globs
     if _is_dangerous(command):
