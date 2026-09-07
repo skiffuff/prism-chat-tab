@@ -101,3 +101,17 @@ also supported.
 
 The API key lives only in the OS keyring, with an env fallback. It is
 never written to `config.json` and never committed.
+
+### Recent Security Fixes
+
+- **Command Injection** - Removed dangerous commands from `allowed_commands` whitelist (python, node, curl, docker, kubectl, sudo, ssh). The daemon now uses `subprocess.run()` with `shell=False` and validates commands against a restrictive whitelist.
+
+- **SSRF Protection** - Added trailing dot validation in `_valid_https_url()` to prevent subdomain takeover attacks via DNS rebinding.
+
+- **Path Traversal** - Fixed `_allowed_read_path()` to use `os.path.abspath()` instead of `realpath()` to prevent symlink-based path traversal attacks.
+
+- **Command Filtering** - Improved `_is_dangerous()` pattern matching for:
+  - Base64-encoded command detection
+  - Process substitution (`<(...)`, `>(...)`)
+  - Command substitution (`$(...)`, backticks)
+  - Shell metacharacters (`;`, `&`, `|`)
