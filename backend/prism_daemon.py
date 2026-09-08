@@ -113,14 +113,18 @@ def run_bash_execution(command: str) -> str:
             # Interpreters (python, node) can execute arbitrary code via -c or files
             # Network tools (curl, wget) can download and execute payloads
             # Container/infra tools (docker, kubectl) can manage infrastructure
+            # CRITICAL: git and dd are BLOCKED from auto-execution due to arbitrary code execution via flags
+            # git: -c core.pager=cmd, --config=, clone --config= can execute arbitrary commands
+            # dd: can overwrite arbitrary files with if=/dev/sda, of=/dev/sda
+            # These require explicit user confirmation via modal dialog
             allowed_commands = {
-                'git', 'ls', 'echo', 'pwd', 'cd', 'mkdir', 'rm',
+                'ls', 'echo', 'pwd', 'mkdir', 'rm',
                 'cp', 'mv', 'chmod', 'chown', 'sort',
                 'wc', 'date', 'whoami', 'id', 'uname',
                 'df', 'du', 'free', 'top', 'ps', 'tree', 'jq', 'readlink',
                 'stat', 'ln', 'touch', 'rmdir', 'mktemp',
                 'base64', 'md5sum', 'sha256sum', 'test',
-                'file', 'truncate', 'dd', 'od', 'xxd', 'hexdump',
+                'file', 'od', 'xxd', 'hexdump',
                 'strings', 'cut', 'paste', 'tr', 'uniq',
                 'tee', 'nl', 'rev', 'fold',
                 'expand', 'unexpand', 'pr',
@@ -148,32 +152,29 @@ def run_bash_execution(command: str) -> str:
         stdout_str = result.stdout.decode('utf-8', errors='replace')
         stderr_str = result.stderr.decode('utf-8', errors='replace')
 
-        # Filter API keys from env command output
+        # Redact API keys from env command output by replacing actual token values
         def _sanitize_env_output(text: str) -> str:
-            """Remove lines containing sensitive patterns from env output."""
+            """Remove API keys and tokens from command output by redacting actual values.
+
+            Instead of relying on pattern matching (which can be bypassed), we redact
+            the real token values that are loaded into memory in PROVIDER_KEYS.
+            This ensures the actual sensitive values are replaced even if the output
+            format is unusual (plain token without key name, or JSON/yaml formatting).
+            """
             if not text:
                 return text
-            # Patterns to filter: *_API_KEY, *_TOKEN, SECRET, KEY patterns
-            sensitive_patterns = [
-                r'.*_API_KEY=',
-                r'.*_TOKEN=',
-                r'.*_SECRET=',
-                r'^SECRET',
-                r'^API_KEY',
-                r'^TOKEN',
-                r'^KEY=',
-                r'^KEY$',
-            ]
-            filtered_lines = []
-            for line in text.split('\n'):
-                skip = False
-                for pattern in sensitive_patterns:
-                    if re.search(pattern, line, re.IGNORECASE):
-                        skip = True
-                        break
-                if not skip:
-                    filtered_lines.append(line)
-            return '\n'.join(filtered_lines)
+
+            # Redact actual API key values loaded from keyring/env
+            for provider_key, key_val in PROVIDER_KEYS.items():
+                if key_val and isinstance(key_val, str) and len(key_val) > 8:
+                    text = text.replace(key_val, "[REDACTED_API_KEY]")
+
+            # Redact the daemon token if present
+            daemon_token = DaemonToken()
+            if daemon_token:
+                text = text.replace(daemon_token, "[REDACTED_DAEMON_TOKEN]")
+
+            return text
 
         stdout_str = _sanitize_env_output(stdout_str)
         stderr_str = _sanitize_env_output(stderr_str)
@@ -281,6 +282,19 @@ def _allowed_read_path(path: str):
             os.path.normpath(os.path.expanduser("~/.gnupg")),
             os.path.normpath(os.path.expanduser("~/.config/prism")),
             os.path.normpath(os.path.expanduser("~/.local/share/prism")),
+            # Shell config files that often contain API tokens
+            os.path.normpath(os.path.expanduser("~/.bashrc")),
+            os.path.normpath(os.path.expanduser("~/.zshrc")),
+            os.path.normpath(os.path.expanduser("~/.bash_profile")),
+            os.path.normpath(os.path.expanduser("~/.zprofile")),
+            os.path.normpath(os.path.expanduser("~/.bash_logout")),
+            os.path.normpath(os.path.expanduser("~/.zshenv")),
+            os.path.normpath(os.path.expanduser("~/.bash_history")),
+            os.path.normpath(os.path.expanduser("~/.zsh_history")),
+            # Browser session files that may contain credentials
+            os.path.normpath(os.path.expanduser("~/.config/google-chrome")),
+            os.path.normpath(os.path.expanduser("~/.config/mozilla")),
+            os.path.normpath(os.path.expanduser("~/.config/chromium")),
             "/etc",
             "/boot",
             "/dev",
@@ -683,14 +697,42 @@ DANGEROUS_PATTERNS = [
 ]
 
 def _is_dangerous(command: str) -> bool:
+    """Check if a command is dangerous and requires user confirmation.
+
+    Uses strict whitelisting approach: any shell metacharacters that could
+    chain commands or bypass checks are treated as dangerous by default.
+    """
     if not command:
         return False
     cmd = command.strip().lower()
-    # Check all dangerous patterns
+
+    # Check all dangerous patterns first
     for pat in DANGEROUS_PATTERNS:
         if re.search(pat, cmd):
             return True
-    # Additional dangerous patterns that should never be auto-approved
+
+    # Check for shell metacharacters that chain commands - these MUST be blocked
+    # These cannot be safely whitelisted because they enable arbitrary command execution
+    if re.search(r'[;&|]', command):  # ;, &, |
+        return True
+    if re.search(r'\|\s*(ba)?sh\b', command):  # pipe to shell
+        return True
+
+    # Check for command substitution - always dangerous
+    if '$(' in command or '`' in command:
+        return True
+
+    # Check for process substitution
+    if '<(' in command or '>(' in command:
+        return True
+
+    # Check for redirection to sensitive paths
+    if re.search(r'>\s*/etc', command) or re.search(r'>\s*/boot', command):
+        return True
+    if re.search(r'>>\s*/etc', command) or re.search(r'>>\s*/boot', command):
+        return True
+
+    # Dangerous commands with arguments that enable arbitrary code execution
     dangerous_commands = [
         'su ', 'su\n', 'su;', 'su|',
         'pkexec', 'visudo', 'vipw', 'vigr',
@@ -707,29 +749,17 @@ def _is_dangerous(command: str) -> bool:
         'crontab ', 'at ',
         'ansible-playbook', 'terraform ',
         '/dev/shm/', '/proc/', '/sys/',
-        ';$(', '${', '`',
-        '|curl', '|wget', '|nc ', '|netcat ', '|socat ',
         'python -m http.server', 'python3 -m http.server',
         'php -S ', 'ruby -e ', 'node -e ',
     ]
     for dc in dangerous_commands:
         if dc in cmd:
             return True
-    # Check for base64 decode patterns
+
+    # Check for base64 decode (can be used to obfuscate malicious commands)
     if re.search(r'base64\s+(?:-d|--decode)', cmd):
         return True
-    # Process substitution
-    if '<(' in command or '>(' in command:
-        return True
-    # Command substitution
-    if '$(' in command or '`' in command:
-        return True
-    # Shell metacharacters chaining commands
-    if re.search(r'[;&|]\s*$', command.strip()):
-        return True
-    # Dangerous commands with arguments
-    if re.search(r'\b(sudo|rm|mv|dd|mkfs)\s+', cmd):
-        return True
+
     return False
 
 def _matches_pattern(command: str, pattern: str) -> bool:
