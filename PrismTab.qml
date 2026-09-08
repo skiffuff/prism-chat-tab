@@ -50,6 +50,9 @@ Rectangle {
     property bool isDaemonOnline: false
     property bool isLoading: false
     property int activeChatIndex: 0
+    property var providersModel: ListModel { }
+    property string currentProvider: "gemini"
+    property bool providersLoaded: false
 
     // Per-chat message history: chatsData[i] -> array of {sender, text, isExec, timestamp}
     property var chatsData: []
@@ -81,6 +84,56 @@ Rectangle {
             // Token file not readable — daemon will reject requests (401).
         }
         checkDaemonHealth();
+        loadProviders();
+    }
+
+    function loadProviders() {
+        httpRequest("GET", root.baseUrl + "/providers", undefined,
+            function(xhr) {
+                try {
+                    var obj = JSON.parse(xhr.responseText);
+                    if (obj.providers) {
+                        root.providersModel.clear();
+                        obj.providers.forEach(function(p) {
+                            root.providersModel.append(p);
+                        });
+                        // Set current provider if not already set
+                        if (!root.providersLoaded) {
+                            root.currentProvider = obj.current || "gemini";
+                            root.providersLoaded = true;
+                        }
+                    }
+                } catch (e) {
+                    console.log("Failed to parse providers:", e.message);
+                }
+            },
+            function(xhr) {
+                console.log("Failed to load providers");
+            }
+        );
+    }
+
+    function setProvider(providerId) {
+        if (providerId === root.currentProvider) return;
+
+        var payload = JSON.stringify({ "provider": providerId });
+        httpRequest("POST", root.baseUrl + "/provider", payload,
+            function(xhr) {
+                var obj = JSON.parse(xhr.responseText);
+                if (obj.ok) {
+                    root.currentProvider = providerId;
+                    // Update first message sender for new chats
+                    appendMessage(providerId === "gemini" ? "gemini" : "claude",
+                        providerId === "gemini"
+                            ? "Привет! Я Gemini Assistant в Caelestia Dashboard. Чем могу помочь по системе Arch Linux / Hyprland?"
+                            : "Привет! Я Claude Assistant в Caelestia Dashboard. Чем могу помочь по системе Arch Linux / Hyprland?",
+                        false);
+                }
+            },
+            function(xhr) {
+                appendMessage("system", "[ Ошибка смены провайдера ]", true);
+            }
+        );
     }
 
     // ==========================================
@@ -507,6 +560,73 @@ Rectangle {
                     anchors.leftMargin: 20
                     anchors.rightMargin: 20
 
+                    // Provider selector (Opencode-style)
+                    Rectangle {
+                        id: providerSelector
+                        implicitWidth: 120
+                        implicitHeight: 32
+                        color: palette.surfaceAlt
+                        radius: 8
+                        border.width: 1
+                        border.color: palette.surfaceAlt
+                        visible: root.providersLoaded
+
+                        MouseArea {
+                            anchors.fill: parent
+                            onClicked: providerMenu.open()
+                        }
+
+                        RowLayout {
+                            anchors.left: parent.left
+                            anchors.leftMargin: 10
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: 8
+
+                            Rectangle {
+                                width: 16
+                                height: 16
+                                radius: 50
+                                color: {
+                                    var provider = currentProvider
+                                    if (provider === "gemini") return "#4285F4"
+                                    if (provider === "anthropic") return "#D97757"
+                                    return palette.surface
+                                }
+                            }
+                            Text {
+                                text: currentProvider === "gemini" ? "Gemini" : "Claude"
+                                color: palette.text
+                                font.pixelSize: 13
+                                font.bold: true
+                            }
+                            Text {
+                                text: "▼"
+                                color: palette.textDim
+                                font.pixelSize: 10
+                            }
+                        }
+                    }
+
+                    // Provider menu
+                    Menu {
+                        id: providerMenu
+                        implicitWidth: 180
+                        property var currentProvider: root.currentProvider
+
+                        MenuItem {
+                            text: "Gemini"
+                            checkable: true
+                            checked: root.currentProvider === "gemini"
+                            onTriggered: root.setProvider("gemini")
+                        }
+                        MenuItem {
+                            text: "Claude"
+                            checkable: true
+                            checked: root.currentProvider === "anthropic"
+                            onTriggered: root.setProvider("anthropic")
+                        }
+                    }
+
                     // Current chat title
                     Text {
                         text: chatsModel.count > 0 && root.activeChatIndex < chatsModel.count ?
@@ -765,14 +885,14 @@ Rectangle {
 
     Popup {
         id: confirmModal
-        width: 460
+        width: 520
         implicitHeight: column.implicitHeight + 40
         modal: true
         focus: true
         closePolicy: Popup.NoAutoClose
         background: Rectangle {
             color: palette.surface
-            radius: 14
+            radius: 12
             border.width: 1
             border.color: palette.surfaceAlt
         }
@@ -780,54 +900,84 @@ Rectangle {
         ColumnLayout {
             id: column
             anchors.fill: parent
-            anchors.margins: 16
-            spacing: 12
+            anchors.margins: 20
+            spacing: 16
 
-            Text {
-                text: "Подтверждение команды"
-                color: palette.text
-                font.pixelSize: 15
-                font.bold: true
+            // Header with icon
+            RowLayout {
+                spacing: 12
+
+                Rectangle {
+                    width: 40
+                    height: 40
+                    radius: 10
+                    color: {
+                        if (confirmDangerNote.visible) return palette.red + "33"
+                        return palette.accent + "33"
+                    }
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: confirmDangerNote.visible ? "⚠" : "⚡"
+                        color: confirmDangerNote.visible ? palette.red : palette.accent
+                        font.pixelSize: 20
+                        font.bold: true
+                    }
+                }
+
+                ColumnLayout {
+                    spacing: 4
+
+                    Text {
+                        text: "Разрешить выполнение?"
+                        color: palette.text
+                        font.pixelSize: 17
+                        font.bold: true
+                    }
+
+                    Text {
+                        text: "Модель хочет выполнить команду в терминале"
+                        color: palette.textMuted
+                        font.pixelSize: 13
+                    }
+                }
             }
 
-            Text {
-                text: "Модель хочет выполнить команду в терминале:"
-                color: palette.textMuted
-                font.pixelSize: 12
-                wrapMode: Text.Wrap
-            }
-
+            // Command display
             Rectangle {
                 Layout.fillWidth: true
                 implicitHeight: confirmCommandText.implicitHeight + 16
                 color: palette.black
                 radius: 8
                 border.width: 1
-                border.color: palette.yellow
+                border.color: palette.yellow + "66"
 
                 Text {
                     id: confirmCommandText
                     anchors.fill: parent
-                    anchors.margins: 8
+                    anchors.margins: 12
                     color: palette.green
-                    font.pixelSize: 12
+                    font.pixelSize: 13
                     font.family: "JetBrains Mono, Fira Code, monospace"
                     wrapMode: Text.Wrap
+                    textFormat: Text.PlainText
                 }
             }
 
+            // Danger warning
             Text {
                 id: confirmDangerNote
                 visible: false
-                text: "⚠ Опасная команда — аккуратно."
+                text: "Опасная команда — аккуратно."
                 color: palette.red
-                font.pixelSize: 12
+                font.pixelSize: 13
                 font.bold: true
             }
 
+            // Opencode-style buttons: two main options
             RowLayout {
                 Layout.fillWidth: true
-                spacing: 8
+                spacing: 12
 
                 Button {
                     id: confirmDeny
@@ -835,9 +985,9 @@ Rectangle {
                     text: "Отклонить"
                     palette.buttonText: palette.text
                     background: Rectangle {
-                        color: palette.surfaceAlt
+                        color: palette.red
                         radius: 8
-                        implicitHeight: 36
+                        implicitHeight: 42
                     }
                     onClicked: root.confirmTool("deny")
                 }
@@ -845,12 +995,12 @@ Rectangle {
                 Button {
                     id: confirmOnce
                     Layout.fillWidth: true
-                    text: "Разрешить один раз"
+                    text: "Один раз"
                     palette.buttonText: palette.black
                     background: Rectangle {
                         color: palette.accent
                         radius: 8
-                        implicitHeight: 36
+                        implicitHeight: 42
                     }
                     onClicked: root.confirmTool("allow")
                 }
@@ -858,12 +1008,13 @@ Rectangle {
                 Button {
                     id: confirmAllways
                     Layout.fillWidth: true
-                    text: "Разрешить всегда"
+                    text: "Всегда"
                     palette.buttonText: palette.black
+                    visible: !confirmDangerNote.visible
                     background: Rectangle {
                         color: palette.green
                         radius: 8
-                        implicitHeight: 36
+                        implicitHeight: 42
                     }
                     onClicked: root.confirmTool("never")
                 }
