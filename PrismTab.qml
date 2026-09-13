@@ -4,29 +4,32 @@ import QtQuick.Layouts 1.15
 
 Rectangle {
     id: root
-    implicitWidth: 900
-    implicitHeight: 650
+    implicitWidth: 860
+    implicitHeight: 600
     color: palette.base
 
     // ==========================================
     // Palette — single source of truth for all colors (Catppuccin Mocha)
     // ==========================================
-    readonly property var palette: ({
-        base: "#1e1e2e",          // main background
-        surface: "#181825",       // sidebar / input area background
-        surfaceAlt: "#313244",    // cards, borders, second-level surfaces
-        surfaceHover: "#45475a",  // hover state for buttons/items
-        accent: "#89b4fa",        // primary accent (user bubbles, highlights)
-        accentHover: "#b4befe",   // accent on hover
-        text: "#cdd6f4",          // primary text
-        textMuted: "#a6adc8",     // secondary text (chat titles, timestamps)
-        textDim: "#6c7086",       // tertiary text (labels, placeholders)
-        green: "#a6e3a1",         // status online / exec output
-        red: "#f38ba8",           // status offline / errors
-        yellow: "#f9e2af",        // exec message accent
-        black: "#11111b",         // dark surface (exec background)
-        white: "#ffffff"
-    })
+    QtObject {
+        id: palette
+        readonly property color base: "#1e1e2e"
+        readonly property color surface: "#181825"
+        readonly property color surfaceAlt: "#313244"
+        readonly property color surfaceHover: "#45475a"
+        readonly property color accent: "#89b4fa"
+        readonly property color accentHover: "#b4befe"
+        readonly property color text: "#cdd6f4"
+        readonly property color textMuted: "#a6adc8"
+        readonly property color textDim: "#6c7086"
+        readonly property color green: "#a6e3a1"
+        readonly property color red: "#f38ba8"
+        readonly property color yellow: "#f9e2af"
+        readonly property color black: "#11111b"
+        readonly property color white: "#ffffff"
+        readonly property color gemini: "#4285F4"
+        readonly property color anthropic: "#D97757"
+    }
 
     // ==========================================
     // Backend endpoints (local Gemini daemon, see gemini_daemon.py)
@@ -73,18 +76,24 @@ Rectangle {
             var home = Qt.getenv("HOME");
             var tokenPath = "file://" + home + "/.local/share/prism/daemon.token";
             var xhr = new XMLHttpRequest();
-            xhr.open("GET", tokenPath, false);
+            xhr.open("GET", tokenPath, true); // Changed to asynchronous
+            xhr.onreadystatechange = function() {
+                if (xhr.readyState === XMLHttpRequest.DONE) {
+                    if ((xhr.status === 0 || xhr.status === 200) && xhr.responseText) {
+                        var t = xhr.responseText.trim();
+                        if (t !== "")
+                            root.authToken = t;
+                    }
+                    checkDaemonHealth();
+                    loadProviders();
+                }
+            };
             xhr.send();
-            if ((xhr.status === 0 || xhr.status === 200) && xhr.responseText) {
-                var t = xhr.responseText.trim();
-                if (t !== "")
-                    root.authToken = t;
-            }
         } catch (e) {
             // Token file not readable — daemon will reject requests (401).
+            checkDaemonHealth();
+            loadProviders();
         }
-        checkDaemonHealth();
-        loadProviders();
     }
 
     function loadProviders() {
@@ -242,8 +251,6 @@ Rectangle {
                 chatsModel.setProperty(activeChatIndex, "title", autoTitle);
             }
         }
-
-        messageListView.positionViewAtEnd();
     }
 
     // ==========================================
@@ -363,7 +370,7 @@ Rectangle {
             color: palette.surface
 
             Behavior on Layout.preferredWidth {
-                NumberAnimation { duration: 250; easing.type: Easing.InOutQuad }
+                NumberAnimation { duration: 400; easing.type: Easing.OutExpo }
             }
 
             // Right border separator
@@ -398,11 +405,16 @@ Rectangle {
                             color: palette.text
                             font.pixelSize: 14
                         }
+                        Accessible.role: Accessible.Button
+                        Accessible.name: "Свернуть/развернуть боковую панель"
 
                         HoverHandler { id: sidebarToggleHover }
                         TapHandler {
+                            id: sidebarToggleTap
                             onTapped: root.sidebarCollapsed = !root.sidebarCollapsed
                         }
+                        scale: sidebarToggleTap.pressed ? 0.9 : 1.0
+                        Behavior on scale { NumberAnimation { duration: 100; easing.type: Easing.OutBack } }
                     }
 
                     // "+ New Chat" button
@@ -431,10 +443,16 @@ Rectangle {
                             }
                         }
 
+                        Accessible.role: Accessible.Button
+                        Accessible.name: "Создать новый чат"
+
                         HoverHandler { id: newChatHover }
                         TapHandler {
+                            id: newChatTap
                             onTapped: root.createNewChat("Новый диалог")
                         }
+                        scale: newChatTap.pressed ? 0.95 : 1.0
+                        Behavior on scale { NumberAnimation { duration: 100; easing.type: Easing.OutBack } }
                     }
                 }
 
@@ -457,8 +475,11 @@ Rectangle {
 
                     HoverHandler { id: newChatCollapsedHover }
                     TapHandler {
+                        id: newChatCollapsedTap
                         onTapped: root.createNewChat("Новый диалог")
                     }
+                    scale: newChatCollapsedTap.pressed ? 0.95 : 1.0
+                    Behavior on scale { NumberAnimation { duration: 100; easing.type: Easing.OutBack } }
                 }
 
                 // Chat history section title
@@ -476,9 +497,25 @@ Rectangle {
                     id: chatListView
                     Layout.fillWidth: true
                     Layout.fillHeight: true
+                    Layout.bottomMargin: 10
                     clip: true
                     spacing: 6
                     model: chatsModel
+                    boundsBehavior: Flickable.StopAtBounds
+
+                    // Visible scroll indicator: with many chats the list was
+                    // silently clipped at the bottom with no hint that more
+                    // history exists below the fold ("doesn't fit").
+                    ScrollBar.vertical: ScrollBar {
+                        policy: ScrollBar.AsNeeded
+                        contentItem: Rectangle {
+                            implicitWidth: 4
+                            radius: 2
+                            color: palette.textDim
+                            opacity: parent.active ? 0.7 : 0.3
+                            Behavior on opacity { NumberAnimation { duration: 150 } }
+                        }
+                    }
 
                     delegate: Rectangle {
                         id: chatItem
@@ -528,6 +565,8 @@ Rectangle {
                         TapHandler {
                             onTapped: root.loadChat(index)
                         }
+                        Accessible.role: Accessible.ListItem
+                        Accessible.name: "Чат: " + model.title
                     }
                 }
             }
@@ -563,8 +602,8 @@ Rectangle {
                     // Provider selector (Opencode-style)
                     Rectangle {
                         id: providerSelector
-                        implicitWidth: 120
-                        implicitHeight: 32
+                        Layout.preferredWidth: 140
+                        Layout.preferredHeight: 32
                         color: palette.surfaceAlt
                         radius: 8
                         border.width: 1
@@ -572,9 +611,12 @@ Rectangle {
                         visible: root.providersLoaded
 
                         MouseArea {
+                            id: providerTap
                             anchors.fill: parent
-                            onClicked: providerMenu.open()
+                            onClicked: root.openProviderMenu()
                         }
+                        scale: providerTap.pressed ? 0.95 : 1.0
+                        Behavior on scale { NumberAnimation { duration: 100; easing.type: Easing.OutBack } }
 
                         RowLayout {
                             anchors.left: parent.left
@@ -587,43 +629,23 @@ Rectangle {
                                 height: 16
                                 radius: 50
                                 color: {
-                                    var provider = currentProvider
-                                    if (provider === "gemini") return "#4285F4"
-                                    if (provider === "anthropic") return "#D97757"
+                                    var provider = root.currentProvider
+                                    if (provider === "gemini") return palette.gemini
+                                    if (provider === "anthropic") return palette.anthropic
                                     return palette.surface
                                 }
                             }
                             Text {
-                                text: currentProvider === "gemini" ? "Gemini" : "Claude"
+                                text: root.currentProvider === "gemini" ? "Gemini" : "Claude"
                                 color: palette.text
                                 font.pixelSize: 13
                                 font.bold: true
                             }
                             Text {
-                                text: "▼"
+                                text: providerMenu.visible ? "▲" : "▼"
                                 color: palette.textDim
                                 font.pixelSize: 10
                             }
-                        }
-                    }
-
-                    // Provider menu
-                    Menu {
-                        id: providerMenu
-                        implicitWidth: 180
-                        property var currentProvider: root.currentProvider
-
-                        MenuItem {
-                            text: "Gemini"
-                            checkable: true
-                            checked: root.currentProvider === "gemini"
-                            onTriggered: root.setProvider("gemini")
-                        }
-                        MenuItem {
-                            text: "Claude"
-                            checkable: true
-                            checked: root.currentProvider === "anthropic"
-                            onTriggered: root.setProvider("anthropic")
                         }
                     }
 
@@ -684,6 +706,8 @@ Rectangle {
                 rightMargin: 20
                 model: messagesModel
 
+                onCountChanged: positionViewAtEnd()
+
                 delegate: Item {
                     id: messageDelegate
                     width: messageListView.width - messageListView.leftMargin - messageListView.rightMargin
@@ -706,11 +730,11 @@ Rectangle {
                     }
 
                     Behavior on opacity {
-                        NumberAnimation { duration: 250; easing.type: Easing.OutCubic }
+                        NumberAnimation { duration: 400; easing.type: Easing.OutQuint }
                     }
 
                     Behavior on transform {
-                        NumberAnimation { duration: 250; easing.type: Easing.OutCubic }
+                        NumberAnimation { duration: 400; easing.type: Easing.OutQuint }
                     }
 
                     // Message bubble
@@ -818,6 +842,8 @@ Rectangle {
                                 wrapMode: TextEdit.Wrap
                                 verticalAlignment: TextEdit.AlignVCenter
                                 selectByMouse: true
+                                Accessible.role: Accessible.EditableText
+                                Accessible.name: "Поле ввода сообщения"
 
                                 // Enter sends, Shift+Enter inserts a newline
                                 Keys.onPressed: function(event) {
@@ -863,12 +889,119 @@ Rectangle {
 
                         HoverHandler { id: sendHover }
                         TapHandler {
+                            id: sendTap
                             onTapped: {
                                 if (sendButton.canSend)
                                     root.sendMessage();
                             }
                         }
+                        scale: sendTap.pressed ? 0.95 : 1.0
+                        Behavior on scale { NumberAnimation { duration: 100; easing.type: Easing.OutBack } }
+                        Accessible.role: Accessible.Button
+                        Accessible.name: "Отправить сообщение"
                     }
+                }
+            }
+        }
+    }
+
+    // ==========================================
+    // Provider selector dropdown
+    // ==========================================
+    // NOTE: this is a plain Popup with a fully custom background/contentItem,
+    // deliberately NOT QtQuick.Controls Menu/MenuItem — those render as an
+    // empty box in Quickshell panel surfaces because there is no
+    // ApplicationWindow/Overlay for their default (Style-provided) delegates
+    // to attach to. A hand-styled Popup needs no such style resolution.
+    function openProviderMenu() {
+        var pos = providerSelector.mapToItem(root, 0, providerSelector.height + 6);
+        providerMenu.x = pos.x;
+        providerMenu.y = pos.y;
+        providerMenu.open();
+    }
+
+    Popup {
+        id: providerMenu
+        width: 170
+        implicitHeight: providerMenuColumn.implicitHeight + 16
+        padding: 0
+        modal: false
+        focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+        enter: Transition {
+            NumberAnimation { property: "opacity"; from: 0.0; to: 1.0; duration: 200; easing.type: Easing.OutQuint }
+            NumberAnimation { property: "scale"; from: 0.9; to: 1.0; duration: 200; easing.type: Easing.OutBack }
+        }
+        exit: Transition {
+            NumberAnimation { property: "opacity"; from: 1.0; to: 0.0; duration: 150; easing.type: Easing.InQuint }
+            NumberAnimation { property: "scale"; from: 1.0; to: 0.9; duration: 150; easing.type: Easing.InQuint }
+        }
+
+        background: Rectangle {
+            color: palette.surfaceAlt
+            radius: 10
+            border.width: 1
+            border.color: palette.surfaceHover
+        }
+
+        ColumnLayout {
+            id: providerMenuColumn
+            anchors.fill: parent
+            anchors.margins: 8
+            spacing: 4
+
+            Repeater {
+                model: root.providersModel
+
+                delegate: Rectangle {
+                    id: providerOption
+                    required property string id
+                    required property string name
+
+                    Layout.fillWidth: true
+                    height: 36
+                    radius: 8
+                    color: optHover.hovered ? palette.surfaceHover : "transparent"
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 10
+                        anchors.rightMargin: 10
+                        spacing: 8
+
+                        Rectangle {
+                            width: 14
+                            height: 14
+                            radius: 50
+                            color: providerOption.id === "gemini" ? palette.gemini : palette.anthropic
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            text: providerOption.name
+                            color: palette.text
+                            font.pixelSize: 13
+                            font.bold: providerOption.id === root.currentProvider
+                        }
+                        Text {
+                            visible: providerOption.id === root.currentProvider
+                            text: "✓"
+                            color: palette.accent
+                            font.pixelSize: 12
+                            font.bold: true
+                        }
+                    }
+
+                    HoverHandler { id: optHover }
+                    TapHandler {
+                        id: optTap
+                        onTapped: {
+                            root.setProvider(providerOption.id);
+                            providerMenu.close();
+                        }
+                    }
+                    scale: optTap.pressed ? 0.95 : 1.0
+                    Behavior on scale { NumberAnimation { duration: 100; easing.type: Easing.OutBack } }
                 }
             }
         }
@@ -989,6 +1122,8 @@ Rectangle {
                         radius: 8
                         implicitHeight: 42
                     }
+                    scale: pressed ? 0.95 : 1.0
+                    Behavior on scale { NumberAnimation { duration: 100; easing.type: Easing.OutBack } }
                     onClicked: root.confirmTool("deny")
                 }
 
@@ -1002,6 +1137,8 @@ Rectangle {
                         radius: 8
                         implicitHeight: 42
                     }
+                    scale: pressed ? 0.95 : 1.0
+                    Behavior on scale { NumberAnimation { duration: 100; easing.type: Easing.OutBack } }
                     onClicked: root.confirmTool("allow")
                 }
 
@@ -1016,6 +1153,8 @@ Rectangle {
                         radius: 8
                         implicitHeight: 42
                     }
+                    scale: pressed ? 0.95 : 1.0
+                    Behavior on scale { NumberAnimation { duration: 100; easing.type: Easing.OutBack } }
                     onClicked: root.confirmTool("never")
                 }
             }
