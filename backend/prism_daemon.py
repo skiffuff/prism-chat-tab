@@ -38,6 +38,9 @@ WORKER_URL = os.environ.get("PRISM_WORKER_URL", "")
 # (the worker is only needed where Google Gemini is geo-blocked).
 GEMINI_DIRECT_BASE = "https://generativelanguage.googleapis.com"
 ANTHROPIC_URL = "https://api.anthropic.com"
+# Upper bound on a chat completion, matching the Anthropic path. Every outbound
+# request needs one: requests defaults to waiting forever.
+GEMINI_CHAT_TIMEOUT = 120
 
 def _gemini_base() -> str:
     """Base URL for Gemini requests: worker proxy if set, otherwise the direct Google API."""
@@ -113,28 +116,36 @@ def run_bash_execution(command: str) -> str:
             # Interpreters (python, node) can execute arbitrary code via -c or files
             # Network tools (curl, wget) can download and execute payloads
             # Container/infra tools (docker, kubectl) can manage infrastructure
-            # CRITICAL: git and dd are BLOCKED from auto-execution due to arbitrary code execution via flags
-            # git: -c core.pager=cmd, --config=, clone --config= can execute arbitrary commands
-            # dd: can overwrite arbitrary files with if=/dev/sda, of=/dev/sda
-            # These require explicit user confirmation via modal dialog
+            # SECURITY MODEL: run_bash uses shell=False, so shell metacharacters
+            # (|, ;, $(), >, backticks) are inert — they become literal argv.
+            # The only remaining way to cause harm is an allowlisted BINARY that
+            # can itself execute code, write/delete/overwrite files, or change
+            # permissions. Therefore the allowlist below is strictly read-only /
+            # inspection commands. The following are deliberately EXCLUDED:
+            #   - code execution: git (-c alias/core.pager/core.fsmonitor),
+            #     interpreters (python/node/ruby/perl), find (-exec)
+            #   - arbitrary file write/overwrite: dd, tee, cp, mv, sort (-o),
+            #     truncate, ln, mkdir, touch, mktemp, gzip/xz/bzip2/zstd,
+            #     7z/jar/unzip (extract anywhere), tree (-o)
+            #   - deletion: rm, rmdir
+            #   - permission/ownership: chmod, chown
+            # Any of those would allow silent persistence (e.g. writing ~/.bashrc)
+            # once auto-approved, which is exactly the class of bug we are closing.
             allowed_commands = {
-                'ls', 'echo', 'pwd', 'mkdir', 'rm',
-                'cp', 'mv', 'chmod', 'chown', 'sort',
-                'wc', 'date', 'whoami', 'id', 'uname',
-                'df', 'du', 'free', 'top', 'ps', 'tree', 'jq', 'readlink',
-                'stat', 'ln', 'touch', 'rmdir', 'mktemp',
-                'base64', 'md5sum', 'sha256sum', 'test',
-                'file', 'od', 'xxd', 'hexdump',
-                'strings', 'cut', 'paste', 'tr', 'uniq',
-                'tee', 'nl', 'rev', 'fold',
-                'expand', 'unexpand', 'pr',
-                'gzip', 'gunzip', 'bzip2', 'xz', 'zstd',
-                '7z', 'jar', 'zipinfo', 'unzip',
-                'diff', 'patch', 'cmp',
-                'export', 'unset', 'alias', 'unalias', 'type', 'which', 'whereis', 'whatis',
-                'man', 'info', 'help', 'clear', 'tput', 'stty',
+                # filesystem inspection (read-only)
+                'ls', 'pwd', 'stat', 'file', 'readlink', 'du', 'df', 'wc',
+                # text / data inspection (write via redirection is blocked by shell=False)
+                'echo', 'cut', 'paste', 'tr', 'uniq', 'nl', 'rev', 'fold',
+                'expand', 'unexpand', 'pr', 'strings', 'od', 'xxd', 'hexdump',
+                'diff', 'cmp', 'zipinfo', 'base64', 'jq', 'md5sum', 'sha256sum',
+                # system info (read-only)
+                'date', 'whoami', 'id', 'uname', 'free', 'top', 'ps', 'test',
+                'which', 'whereis', 'whatis', 'type',
+                # terminal (harmless)
+                'clear', 'tput', 'stty',
+                # network diagnostics (read-only queries)
                 'ping', 'traceroute', 'nslookup', 'dig', 'host', 'whois',
-                'ip', 'ifconfig', 'netstat', 'ss'
+                'ip', 'ifconfig', 'netstat', 'ss',
             }
             cmd_base = safe_args[0].lower().split('/')[-1]  # Get command name
             if cmd_base not in allowed_commands:
@@ -258,71 +269,46 @@ def _secure_file(path: str):
 
 def _allowed_read_path(path: str):
     """Resolve a client-supplied path, ensuring it stays inside $HOME and
-    outside sensitive directories (~/.ssh, ~/.gnupg, ~/.config/prism).
+    outside sensitive directories, with ALL symlinks fully resolved.
 
-    Security note: We use os.path.abspath() instead of realpath() to prevent
-    symlink-based path traversal attacks.
+    Security: we resolve the *entire* path with os.path.realpath() — including
+    the final component and every parent — so a symlink placed anywhere in the
+    path cannot be used to escape the allowed area (an earlier implementation
+    walked components with a trailing os.sep, which made os.path.islink() always
+    return False and left the guard inert). All comparisons are done on the
+    fully-resolved path, and the banned list is resolved the same way so a
+    symlinked sensitive dir is still caught.
     """
     if not path or not isinstance(path, str):
         return None
     try:
-        home = os.path.expanduser("~")
-        real_home = os.path.normpath(os.path.realpath(home))
+        real_home = os.path.realpath(os.path.expanduser("~"))
+        # Fully resolve symlinks in the whole path, including the leaf.
+        real_path = os.path.realpath(path)
 
-        # Get the absolute path WITHOUT resolving symlinks
-        abs_path = os.path.normpath(os.path.abspath(path))
-
-        # Check if path is under home
-        if abs_path != real_home and not abs_path.startswith(real_home + os.sep):
+        # Must resolve to something inside the real home directory.
+        if real_path != real_home and not real_path.startswith(real_home + os.sep):
             return None
 
-        # Build banned list with resolved paths for comparison
-        banned_paths = [
-            os.path.normpath(os.path.expanduser("~/.ssh")),
-            os.path.normpath(os.path.expanduser("~/.gnupg")),
-            os.path.normpath(os.path.expanduser("~/.config/prism")),
-            os.path.normpath(os.path.expanduser("~/.local/share/prism")),
-            # Shell config files that often contain API tokens
-            os.path.normpath(os.path.expanduser("~/.bashrc")),
-            os.path.normpath(os.path.expanduser("~/.zshrc")),
-            os.path.normpath(os.path.expanduser("~/.bash_profile")),
-            os.path.normpath(os.path.expanduser("~/.zprofile")),
-            os.path.normpath(os.path.expanduser("~/.bash_logout")),
-            os.path.normpath(os.path.expanduser("~/.zshenv")),
-            os.path.normpath(os.path.expanduser("~/.bash_history")),
-            os.path.normpath(os.path.expanduser("~/.zsh_history")),
-            # Browser session files that may contain credentials
-            os.path.normpath(os.path.expanduser("~/.config/google-chrome")),
-            os.path.normpath(os.path.expanduser("~/.config/mozilla")),
-            os.path.normpath(os.path.expanduser("~/.config/chromium")),
-            "/etc",
-            "/boot",
-            "/dev",
-            "/proc",
-            "/sys",
-        ]
+        banned_paths = [os.path.realpath(os.path.expanduser(p)) for p in (
+            "~/.ssh", "~/.gnupg", "~/.config/prism", "~/.local/share/prism",
+            # Shell config / history that often contains tokens or secrets
+            "~/.bashrc", "~/.zshrc", "~/.bash_profile", "~/.zprofile",
+            "~/.bash_logout", "~/.zshenv", "~/.bash_history", "~/.zsh_history",
+            "~/.profile", "~/.netrc", "~/.pgpass",
+            # Cloud / package credentials
+            "~/.aws", "~/.config/gcloud", "~/.docker", "~/.kube",
+            "~/.config/gh", "~/.local/share/keyrings",
+            # Browser profiles that may hold session credentials
+            "~/.config/google-chrome", "~/.config/mozilla", "~/.mozilla",
+            "~/.config/chromium", "~/.config/BraveSoftware",
+        )] + ["/etc", "/boot", "/dev", "/proc", "/sys", "/run"]
 
-        # Check against absolute (non-resolved) path
         for banned in banned_paths:
-            if abs_path == banned or abs_path.startswith(banned + os.sep):
+            if real_path == banned or real_path.startswith(banned + os.sep):
                 return None
 
-        # Check if any component of the path is a symlink pointing outside allowed area
-        parts = abs_path.lstrip(os.sep).split(os.sep)
-        current = ""
-        for part in parts:
-            if not part:
-                continue
-            current = os.path.join(current, part) + os.sep
-            if os.path.islink(current):
-                link_target = os.path.realpath(current)
-                for banned in banned_paths:
-                    if link_target == banned or link_target.startswith(banned + os.sep):
-                        return None
-                    if link_target != real_home and not link_target.startswith(real_home + os.sep):
-                        return None
-
-        return abs_path
+        return real_path
     except Exception:
         return None
 
@@ -407,6 +393,22 @@ def _api_key() -> str:
         return k
     env_var = "ANTHROPIC_API_KEY" if current_provider == "anthropic" else "GEMINI_API_KEY"
     return os.environ.get(env_var, "") or ""
+
+def _gemini_auth(path: str, key: str = None) -> tuple:
+    """Build (url, auth_headers) for a Gemini endpoint.
+
+    Talking to Google directly, the key goes in the `x-goog-api-key` header
+    instead of a `?key=` query parameter, so the credential never sits in a URL
+    (the part most likely to be copied into access logs, error reports and
+    tracebacks). A configured worker proxy keeps the historical query form,
+    because that is the contract the worker was written against.
+    """
+    k = _api_key() if key is None else key
+    base = _gemini_base()
+    if WORKER_URL:
+        sep = "&" if "?" in path else "?"
+        return f"{base}{path}{sep}key={k}", {}
+    return f"{base}{path}", {"x-goog-api-key": k}
 
 def _provider_def():
     for p in PROVIDERS:
@@ -561,12 +563,12 @@ def _generate_chat_title(first_text: str) -> str:
             data = res.json()
             title = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text").strip()
         else:
-            endpoint = f"{_gemini_base()}/v1beta/models/{current_model}:generateContent?key={_api_key()}"
+            endpoint, auth = _gemini_auth(f"/v1beta/models/{current_model}:generateContent")
             payload = {
                 "contents": [{"role": "user", "parts": [{"text": prompt}]}],
                 "generationConfig": {"temperature": 0.8, "topP": 0.95}
             }
-            res = requests.post(endpoint, json=payload, headers={"Content-Type": "application/json; charset=utf-8"}, timeout=30)
+            res = requests.post(endpoint, json=payload, headers={"Content-Type": "application/json; charset=utf-8", **auth}, timeout=30)
             data = res.json()
             title = data["candidates"][0]["content"]["parts"][0]["text"].strip()
         title = re.sub(r'^["\']+|["\']+$', '', title).strip()
@@ -622,29 +624,59 @@ def DaemonToken() -> str:
     return DAEMON_TOKEN if DAEMON_TOKEN else _load_token()
 
 def _authorize(request: Request) -> bool:
-    """Return True if the request carries the correct X-Prism-Token header."""
+    """Return True if the request carries the correct X-Prism-Token header.
+
+    compare_digest() raises TypeError when a str operand contains non-ASCII
+    characters, so a client sending e.g. a Cyrillic token used to surface as an
+    unhandled 500 instead of a clean 401. Comparing UTF-8 bytes keeps the
+    constant-time property and gives every input shape a defined answer.
+    """
     supplied = request.headers.get("X-Prism-Token", "")
     expected = DaemonToken()
-    return bool(expected) and secrets.compare_digest(supplied, expected)
+    if not expected:
+        return False
+    try:
+        return secrets.compare_digest(supplied.encode("utf-8"),
+                                      expected.encode("utf-8"))
+    except (UnicodeEncodeError, TypeError, AttributeError):
+        return False
 
 # ── Rate limiting (in-memory, simple counter per client IP) ──────────────
 RATE_LIMIT_WINDOW = 60      # seconds
 RATE_LIMIT_MAX = 10         # max requests per window per client
-_rate_limiter = {}
+RATE_LIMIT_PRUNE_AT = 64    # only sweep the table once it is worth sweeping
+_rate_limiter = {}          # client -> [hits, window_start]
 _rate_lock = threading.Lock()
 
+def _prune_rate_limiter(now: float) -> None:
+    """Drop clients whose window has fully elapsed. Caller must hold _rate_lock.
+
+    Without this the table keeps one entry per client IP for the lifetime of
+    the daemon.
+    """
+    if len(_rate_limiter) < RATE_LIMIT_PRUNE_AT:
+        return
+    for c in [c for c, v in _rate_limiter.items() if now - v[1] > RATE_LIMIT_WINDOW]:
+        _rate_limiter.pop(c, None)
+
 def _rate_limited(request: Request) -> bool:
-    """Return True if the client exceeded the chat request rate."""
+    """Return True if the client exceeded the chat request rate.
+
+    The window start is deliberately *not* refreshed on each hit. Doing so meant
+    every new request pushed the window forward, so a client that kept trying
+    while throttled could never age out of it — a soft 60s limit behaved like a
+    permanent lockout.
+    """
     client = request.client.host if request.client else "unknown"
     now = time.time()
     try:
         with _rate_lock:
+            _prune_rate_limiter(now)
             cur = _rate_limiter.get(client)
             if not cur or now - cur[1] > RATE_LIMIT_WINDOW:
-                _rate_limiter[client] = [1, now]
+                _rate_limiter[client] = [1, now]   # start a fresh window
                 return False
             cur[0] += 1
-            cur[1] = now
             return cur[0] > RATE_LIMIT_MAX
     except Exception:
         return False
@@ -654,9 +686,10 @@ def _rate_limited(request: Request) -> bool:
 # Tool calls are not executed immediately: they are returned to the client as
 # "pending" tool_use items, the client asks the user, and then calls
 # /tool/confirm with a decision. Decisions are tracked here while waiting.
-PENDING_CONFIRM_TTL = 120  # seconds
+PENDING_CONFIRM_TTL = 120   # seconds before an unanswered prompt counts as denied
+PENDING_REAP_GRACE = 300    # seconds a resolved entry is kept so a late poll still reads it
 
-# pending[tool_use_id] = {"datetime": ts, "resolved": None|"allow"|"deny"|"never",
+# pending[tool_use_id] = {"ts": float, "resolved": None|"allow"|"deny"|"never",
 #                          "command": str, "session_id": str}
 _pending_confirm = {}
 _pending_lock = threading.Lock()
@@ -696,6 +729,21 @@ DANGEROUS_PATTERNS = [
     r'\bchmod\s+-R\s+777\b', r'\bmv\s+/\b', r'\bpasswd\b',
 ]
 
+# Binaries that can execute code, write/overwrite/delete files, or change
+# permissions. These are already excluded from run_bash's allowlist, but we also
+# force them to be treated as dangerous here so that — should the allowlist ever
+# be widened — they can never be auto-approved (_command_ok_by_pattern) or saved
+# as a persistent allow-pattern (_grant_pattern). Defense in depth.
+WRITE_OR_EXEC_BINS = {
+    'git', 'dd', 'tee', 'cp', 'mv', 'rm', 'rmdir', 'mkdir', 'touch', 'mktemp',
+    'ln', 'sort', 'truncate', 'chmod', 'chown', 'chattr', 'patch',
+    'gzip', 'gunzip', 'bzip2', 'bunzip2', 'xz', 'unxz', 'zstd', 'unzstd',
+    '7z', '7za', 'jar', 'unzip', 'tar', 'cpio', 'rsync', 'install', 'tree',
+    'python', 'python3', 'node', 'ruby', 'perl', 'php', 'bash', 'sh', 'zsh',
+    'find', 'xargs', 'env', 'nohup', 'awk', 'gawk', 'sed', 'vi', 'vim', 'nano',
+    'ex', 'ed', 'eval', 'exec', 'source',
+}
+
 def _is_dangerous(command: str) -> bool:
     """Check if a command is dangerous and requires user confirmation.
 
@@ -705,6 +753,16 @@ def _is_dangerous(command: str) -> bool:
     if not command:
         return False
     cmd = command.strip().lower()
+
+    # A command whose leading binary can write/delete/exec is always dangerous,
+    # so it can never be auto-approved or stored as an allow-pattern.
+    try:
+        import shlex as _shlex
+        _first = (_shlex.split(command)[0] if command.strip() else "")
+    except Exception:
+        _first = command.strip().split()[0] if command.strip() else ""
+    if _first.split('/')[-1].lower() in WRITE_OR_EXEC_BINS:
+        return True
 
     # Check all dangerous patterns first
     for pat in DANGEROUS_PATTERNS:
@@ -769,7 +827,12 @@ def _matches_pattern(command: str, pattern: str) -> bool:
     # Rule out dangerous globs
     if _is_dangerous(command):
         return False
-    return fnmatch.fnmatch(c, p)
+    if fnmatch.fnmatch(c, p):
+        return True
+    # If pattern is 'cmd *', allow exactly 'cmd' as well
+    if p.endswith(" *") and c == p[:-2]:
+        return True
+    return False
 
 def _command_ok_by_pattern(command: str) -> bool:
     """Check if the command matches an allowed pattern (and is not dangerous)."""
@@ -781,13 +844,23 @@ def _command_ok_by_pattern(command: str) -> bool:
     return False
 
 def _expire_pending():
-    """Drop stale pending confirmations."""
+    """Deny timed-out confirmations, then reap ones nobody will read again.
+
+    A timed-out entry is marked "deny" rather than removed, so a late poll still
+    gets an explicit decision instead of a confusing "unknown tool call". It is
+    only dropped PENDING_REAP_GRACE later — previously entries were never
+    removed at all, so the table grew for the lifetime of the daemon.
+    """
     now = time.time()
     with _pending_lock:
-        stale = [k for k, v in _pending_confirm.items()
-                 if v.get("resolved") is None and (now - v.get("ts", 0)) > PENDING_CONFIRM_TTL]
-        for k in stale:
-            _pending_confirm[k]["resolved"] = "deny"  # treat timeout as deny
+        for k, v in list(_pending_confirm.items()):
+            ts = v.get("ts", 0)
+            if v.get("resolved") is None:
+                if now - ts > PENDING_CONFIRM_TTL:
+                    v["resolved"] = "deny"  # treat timeout as deny
+                    v["resolved_at"] = now
+            elif now - v.get("resolved_at", ts) > PENDING_REAP_GRACE:
+                _pending_confirm.pop(k, None)
 
 def _grant_pattern(pattern: str):
     """Persist an allowed pattern (safe ones only).
@@ -910,7 +983,7 @@ def stop_screen_recording_and_analyze():
             with open(vid_path, "rb") as f:
                 v_data = base64.b64encode(f.read()).decode()
             os.remove(vid_path)
-            endpoint = f"{_gemini_base()}/v1beta/models/{current_model}:generateContent?key={_api_key()}"
+            endpoint, auth = _gemini_auth(f"/v1beta/models/{current_model}:generateContent")
             payload = {
                 "contents": [{
                     "role": "user",
@@ -922,7 +995,7 @@ def stop_screen_recording_and_analyze():
                 "system_instruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
                 "generationConfig": {"maxOutputTokens": 150}
             }
-            res = requests.post(endpoint, json=payload, headers={"Content-Type": "application/json; charset=utf-8"}, timeout=60)
+            res = requests.post(endpoint, json=payload, headers={"Content-Type": "application/json; charset=utf-8", **auth}, timeout=60)
             rd = res.json()
             cand = rd.get("candidates", [{}])[0].get("content", {})
             text = next((pt.get("text", "") for pt in cand.get("parts", []) if pt.get("text")), "")
@@ -1109,9 +1182,12 @@ def _call_gemini(messages):
         "tools": [BASH_TOOL_DECLARATION],
         "generationConfig": {"temperature": 0.7, "topP": 0.95}
     }
-    endpoint = f"{_gemini_base()}/v1beta/models/{current_model}:generateContent?key={_api_key()}"
+    endpoint, auth = _gemini_auth(f"/v1beta/models/{current_model}:generateContent")
+    # Without an explicit timeout this call can hang forever and wedge the
+    # request thread; _call_anthropic already bounds itself the same way.
     res = requests.post(endpoint, json=payload,
-                        headers={"Content-Type": "application/json; charset=utf-8"})
+                        headers={"Content-Type": "application/json; charset=utf-8", **auth},
+                        timeout=GEMINI_CHAT_TIMEOUT)
     try:
         data = res.json()
     except Exception:
@@ -1536,8 +1612,8 @@ async def list_models(request: Request):
         models = [{"id": m, "label": m} for m in pdef["default_models"]]
     else:
         try:
-            url = f"{_gemini_base()}/v1beta/models?key={_api_key()}"
-            res = requests.get(url, timeout=5)
+            url, auth = _gemini_auth("/v1beta/models")
+            res = requests.get(url, headers=auth, timeout=5)
             if res.status_code == 200:
                 data = res.json()
                 for m in data.get("models", []):
@@ -1868,13 +1944,14 @@ async def validate_settings(request: Request):
             return Response(content=json.dumps({"valid": False, "error": "Invalid Claude API key format"}, ensure_ascii=False),
                             status_code=200, media_type="application/json")
         else:
-            r = requests.get(f"{_gemini_base()}/v1beta/models?key={key}", timeout=10)
+            v_url, v_auth = _gemini_auth("/v1beta/models", key=key)
+            r = requests.get(v_url, headers=v_auth, timeout=10)
             if r.status_code == 200:
                 models = r.json().get("models", [])
                 return Response(content=json.dumps({"valid": True, "models": len(models)}, ensure_ascii=False),
                                 status_code=200, media_type="application/json")
             return Response(content=json.dumps({"valid": False, "error": f"HTTP {r.status_code}"}, ensure_ascii=False),
-                            status_code=200, media_type="application/json")
+                                status_code=200, media_type="application/json")
     except Exception:
         return Response(content=json.dumps({"valid": False, "error": "Validation failed (network error). See daemon logs."}, ensure_ascii=False),
                         status_code=200, media_type="application/json")
