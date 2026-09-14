@@ -1,11 +1,11 @@
 ---
 name: prism-backend
-description: Rules for working with backend/prism_daemon.py (FastAPI daemon for Prism chat tab). Use when adding/modifying endpoints, providers (Gemini/Anthropic), tools (run_bash), permissions, sessions, or config. Triggers on keywords: FastAPI, daemon, endpoint, run_bash, provider, uvicorn, prism_daemon, /chat, keyring.
+description: Rules for working with backend/prism_daemon.py (FastAPI daemon for Prism chat tab). Use when adding/modifying endpoints, providers (Gemini/Anthropic/OpenAI), tools (run_bash), permissions, sessions, or config. Triggers on keywords: FastAPI, daemon, endpoint, run_bash, provider, uvicorn, prism_daemon, /chat, keyring.
 ---
 
 # Prism Backend (prism_daemon.py)
 
-FastAPI daemon, single file `backend/prism_daemon.py`. Native Python 3, no venv in repo (install.sh creates one). Providers: Gemini (direct or Cloudflare worker) and Anthropic.
+FastAPI daemon, single file `backend/prism_daemon.py`. Native Python 3, no venv in repo (install.sh creates one). Providers: Gemini (direct or Cloudflare worker), Anthropic and OpenAI (Chat Completions).
 
 ## Non-negotiable rules
 
@@ -15,6 +15,6 @@ FastAPI daemon, single file `backend/prism_daemon.py`. Native Python 3, no venv 
 4. Successfully executed commands are printed as `[EXEC]: <cmd>` — keep that marker in all execution paths.
 5. Endpoints return JSONResponse with explicit status codes. Use `@app.get/@app.post` only, no body parsing bypass.
 6. Config: `PRISM_CONFIG` env or `~/.config/prism/config.json`. Sessions persisted via `_load_sessions`/`_save_sessions`. Reuse these helpers; do not invent a parallel store.
-7. Provider calls: Gemini uses `_gemini_base()`, Anthropic uses `ANTHROPIC_URL`. Follow the existing build_request/parse_function_call flow for generatation  (functionCall → run_bash). Add new providers to `PROVIDERS` registry with id/name/style.
+7. Provider calls: Gemini uses `_gemini_base()`, Anthropic uses `ANTHROPIC_URL`, OpenAI uses `OPENAI_URL`; one model round goes through `_call_model(provider, hist)`. Follow the existing build_request/parse_function_call flow for generatation  (functionCall → run_bash). Add new providers to `PROVIDERS` registry with id/name/style.
 8. Prompt hygiene: keep `DEFAULT_SYSTEM_INSTRUCTION` style — plain conversational Russian, no markdown emphasis, run_bash for system actions.
 9. Before editing, Read the current prism_daemon.py and work against actual code. Run `python -m py_compile backend/prism_daemon.py` after changes.

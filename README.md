@@ -4,8 +4,9 @@
 > the QML interface were written, debugged and iterated by an LLM.
 
 Chat tab for the [Caelestia](https://github.com/caelestia-dots/shell) shell,
-backed by a lightweight local FastAPI daemon. Works with **Google Gemini** and
-**Claude (Anthropic)** out of the box.
+backed by a lightweight local FastAPI daemon. Works with **Google Gemini**,
+**Claude (Anthropic)** and **ChatGPT (OpenAI)** out of the box; the tab's
+palette, logo and composer follow whichever provider is active.
 
 ## Install
 
@@ -15,7 +16,7 @@ curl -fsSL https://raw.githubusercontent.com/skiffuff/prism-chat-tab/main/instal
 
 Then:
 ```bash
-export GEMINI_API_KEY=your_key      # or ANTHROPIC_API_KEY=...
+export GEMINI_API_KEY=your_key      # or ANTHROPIC_API_KEY=... / OPENAI_API_KEY=...
 ~/.local/share/prism/venv/bin/python ~/.local/share/prism/prism_daemon.py
 ```
 
@@ -33,7 +34,7 @@ The tab will appear in the Caelestia dashboard after a restart.
 - Timestamps on every message
 
 **Daemon (backend/prism_daemon.py)**
-- Multi-provider: Google Gemini and Claude
+- Multi-provider: Google Gemini, Claude and ChatGPT (OpenAI Chat Completions)
 - Direct API or Cloudflare worker routing
 - `run_bash` tool for shell commands
 - Screen recording & analysis (wf-recorder/ffmpeg)
@@ -103,6 +104,8 @@ API keys stored only in OS keyring (never written to disk).
 
 **Daemon won't start:** Check `~/.local/share/prism/venv/bin/python` exists, install deps: `pip install fastapi uvicorn requests secretstorage`
 
-**No API key:** Set `GEMINI_API_KEY` or `ANTHROPIC_API_KEY`, or add via daemon settings API
+**No API key:** Set `GEMINI_API_KEY`, `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, or add via daemon settings API
+
+**OpenAI behind a proxy:** set `"openai_url": "https://your-proxy"` in `~/.config/prism/config.json` (the API only accepts `api.openai.com`, the configured value is kept as-is)
 
 **Screen recording not working:** Install `wf-recorder` (Wayland) or `ffmpeg`, verify `export DISPLAY=:0`

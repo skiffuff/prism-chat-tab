@@ -38,9 +38,11 @@ WORKER_URL = os.environ.get("PRISM_WORKER_URL", "")
 # (the worker is only needed where Google Gemini is geo-blocked).
 GEMINI_DIRECT_BASE = "https://generativelanguage.googleapis.com"
 ANTHROPIC_URL = "https://api.anthropic.com"
-# Upper bound on a chat completion, matching the Anthropic path. Every outbound
+OPENAI_URL = "https://api.openai.com"
+# Upper bound on a chat completion, shared by every provider. Every outbound
 # request needs one: requests defaults to waiting forever.
-GEMINI_CHAT_TIMEOUT = 120
+CHAT_TIMEOUT = 120
+GEMINI_CHAT_TIMEOUT = CHAT_TIMEOUT
 
 def _gemini_base() -> str:
     """Base URL for Gemini requests: worker proxy if set, otherwise the direct Google API."""
@@ -57,6 +59,7 @@ PROVIDERS = [
         "id": "gemini",
         "name": "Gemini",
         "style": "gemini",
+        "env": "GEMINI_API_KEY",
         "icon": "star",
         "logo": "sparkle",
         "primary": "#4285F4",
@@ -77,6 +80,7 @@ PROVIDERS = [
         "id": "anthropic",
         "name": "Claude",
         "style": "claude",
+        "env": "ANTHROPIC_API_KEY",
         "icon": "flare",
         "logo": "claude",
         "primary": "#D97757",
@@ -93,7 +97,37 @@ PROVIDERS = [
             "claude-3-5-sonnet", "claude-3-5-haiku"
         ],
     },
+    {
+        "id": "openai",
+        "name": "ChatGPT",
+        "style": "chatgpt",
+        "env": "OPENAI_API_KEY",
+        "icon": "hub",
+        "logo": "openai",
+        # OpenAI green, the sage of the ChatGPT avatar, and a brighter mint
+        # so the shimmer animations have somewhere to travel.
+        "primary": "#10A37F",
+        "secondary": "#74AA9C",
+        "tertiary": "#19C37D",
+        "bubble": "#10A37F",
+        "gradient": ["#10A37F", "#74AA9C", "#19C37D", "#10A37F"],
+        "greeting": "Hi, I'm ChatGPT",
+        "key_placeholder": "sk-...",
+        "help": "OpenAI API key (for ChatGPT; from keyring or OPENAI_API_KEY env)",
+        "default_model": "gpt-5-mini",
+        "default_models": [
+            "gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-4.1",
+            "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini"
+        ],
+    },
 ]
+
+def _provider_env(pid: str) -> str:
+    """Environment variable that may hold the API key for a provider."""
+    for p in PROVIDERS:
+        if p["id"] == pid:
+            return p.get("env", "")
+    return ""
 
 PROVIDER_KEYS = {}
 current_provider = "gemini"
@@ -226,6 +260,26 @@ ANTHROPIC_TOOLS = [{
             }
         },
         "required": ["command"]
+    }
+}]
+
+# Chat Completions "function" tool. OpenAI validates the JSON schema strictly,
+# so the types here must be lowercase JSON Schema, not Gemini's OBJECT/STRING.
+OPENAI_TOOLS = [{
+    "type": "function",
+    "function": {
+        "name": "run_bash",
+        "description": "Executes bash commands in Linux terminal.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "The bash command to run"
+                }
+            },
+            "required": ["command"]
+        }
     }
 }]
 
@@ -391,8 +445,7 @@ def _api_key() -> str:
     k = PROVIDER_KEYS.get(current_provider, "")
     if k:
         return k
-    env_var = "ANTHROPIC_API_KEY" if current_provider == "anthropic" else "GEMINI_API_KEY"
-    return os.environ.get(env_var, "") or ""
+    return os.environ.get(_provider_env(current_provider), "") or ""
 
 def _gemini_auth(path: str, key: str = None) -> tuple:
     """Build (url, auth_headers) for a Gemini endpoint.
@@ -417,7 +470,7 @@ def _provider_def():
     return PROVIDERS[0]
 
 def _load_config():
-    global _config, SYSTEM_INSTRUCTION, WORKER_URL, ANTHROPIC_URL, current_provider, current_model
+    global _config, SYSTEM_INSTRUCTION, WORKER_URL, ANTHROPIC_URL, OPENAI_URL, current_provider, current_model
     try:
         if os.path.exists(CONFIG_FILE):
             with open(CONFIG_FILE, "r") as f:
@@ -434,8 +487,7 @@ def _load_config():
                     if _keyring_set("gemini", kk):
                         _config.pop("api_key", None)
             if not kk:
-                env_key = "GEMINI_API_KEY" if pid == "gemini" else "ANTHROPIC_API_KEY"
-                kk = os.environ.get(env_key, "")
+                kk = os.environ.get(p["env"], "")
             PROVIDER_KEYS[pid] = kk
         if "worker_url" in _config and _config["worker_url"]:
             WORKER_URL = _config["worker_url"]
@@ -443,6 +495,8 @@ def _load_config():
             WORKER_URL = os.environ["GEMINI_WORKER_URL"]
         if "anthropic_url" in _config and _config["anthropic_url"]:
             ANTHROPIC_URL = _config["anthropic_url"]
+        if "openai_url" in _config and _config["openai_url"]:
+            OPENAI_URL = _config["openai_url"]
         if "system_instruction" in _config and _config["system_instruction"]:
             SYSTEM_INSTRUCTION = _config["system_instruction"]
         current_model = _config.get("model") or _provider_def()["default_model"]
@@ -562,6 +616,11 @@ def _generate_chat_title(first_text: str) -> str:
                                 headers=_anthropic_headers(), timeout=30)
             data = res.json()
             title = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text").strip()
+        elif current_provider == "openai":
+            title = _openai_complete(
+                [{"role": "system", "content": "You only output short chat titles."},
+                 {"role": "user", "content": prompt}],
+                max_tokens=64, timeout=30).strip()
         else:
             endpoint, auth = _gemini_auth(f"/v1beta/models/{current_model}:generateContent")
             payload = {
@@ -979,6 +1038,19 @@ def stop_screen_recording_and_analyze():
                                 headers=_anthropic_headers(), timeout=60)
             data = res.json()
             ans = clean_response_text("".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"))
+        elif current_provider == "openai":
+            # Chat Completions takes images but not video: send one frame.
+            frame = _extract_video_frame(vid_path)
+            os.remove(vid_path)
+            content = []
+            if frame:
+                content.append({"type": "image_url",
+                                "image_url": {"url": f"data:image/png;base64,{frame}"}})
+            content.append({"type": "text", "text": text_prompt})
+            ans = clean_response_text(_openai_complete(
+                [{"role": "system", "content": SYSTEM_INSTRUCTION},
+                 {"role": "user", "content": content}],
+                max_tokens=1024, timeout=60))
         else:
             with open(vid_path, "rb") as f:
                 v_data = base64.b64encode(f.read()).decode()
@@ -1084,6 +1156,129 @@ def _anthropic_headers():
         "accept": "application/json",
     }
 
+def _openai_headers(key: str = None):
+    return {
+        "Authorization": f"Bearer {_api_key() if key is None else key}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+def _openai_reasoning_model(model: str) -> bool:
+    """gpt-5 / o-series models accept reasoning_effort; the others reject it."""
+    m = (model or "").lower()
+    if "chat" in m:  # gpt-5-chat-latest is a plain chat model
+        return False
+    return m.startswith("gpt-5") or bool(re.match(r"^o\d", m))
+
+def _openai_payload(messages, max_tokens: int, tools=None):
+    """Chat Completions request body. Temperature is left at the API default:
+    reasoning models reject any other value and max_tokens is deprecated in
+    favour of max_completion_tokens across the whole family."""
+    payload = {
+        "model": current_model,
+        "max_completion_tokens": max_tokens,
+        "messages": messages,
+    }
+    if tools:
+        payload["tools"] = tools
+        # One command per round: the tool loop executes a single run_bash call
+        # and expects exactly one tool_call to answer.
+        payload["parallel_tool_calls"] = False
+    if _openai_reasoning_model(current_model):
+        payload["reasoning_effort"] = "low"
+    return payload
+
+def _openai_complete(messages, max_tokens: int, timeout: int) -> str:
+    """Plain-text completion for auxiliary requests (titles, screen summary)."""
+    res = requests.post(f"{OPENAI_URL}/v1/chat/completions",
+                        json=_openai_payload(messages, max_tokens),
+                        headers=_openai_headers(), timeout=timeout)
+    data = res.json()
+    if res.status_code >= 400 or "error" in data:
+        return ""
+    return (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+
+def _build_openai_messages(messages):
+    """Canonical history -> Chat Completions messages.
+
+    Tool results live in user-role turns in storage; OpenAI wants them as
+    separate role=tool messages that directly follow the assistant turn that
+    issued the call, so they are split out before any text of that turn.
+    """
+    out = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
+    for m in messages:
+        role = "assistant" if m["role"] != "user" else "user"
+        content = []
+        tool_calls = []
+        tool_results = []
+        for b in _canonical_blocks(m.get("parts", [])):
+            t = b.get("type")
+            if t == "text":
+                if b.get("text"):
+                    content.append({"type": "text", "text": b["text"]})
+            elif t == "image":
+                mime = b.get("mime", "image/png")
+                if mime.startswith("image/"):
+                    content.append({"type": "image_url",
+                                    "image_url": {"url": f"data:{mime};base64,{b.get('data', '')}"}})
+                else:
+                    content.append({"type": "text", "text": "[Прикреплённый файл]"})
+            elif t == "tool_use":
+                tool_calls.append({
+                    "id": b.get("id") or f"call_{uuid.uuid4().hex[:12]}",
+                    "type": "function",
+                    "function": {"name": b.get("name", "run_bash"),
+                                 "arguments": json.dumps(b.get("input", {}), ensure_ascii=False)},
+                })
+            elif t == "tool_result":
+                tool_results.append({
+                    "role": "tool",
+                    "tool_call_id": b.get("tool_use_id") or "",
+                    "content": str(b.get("content", "")),
+                })
+        if role == "assistant":
+            if not content and not tool_calls:
+                continue
+            msg = {"role": "assistant",
+                   "content": "".join(c["text"] for c in content) or None}
+            if tool_calls:
+                msg["tool_calls"] = tool_calls
+            out.append(msg)
+        else:
+            out.extend(tool_results)
+            if content:
+                # A text-only turn can be a plain string; keep the array form
+                # only when an image is attached.
+                if all(c["type"] == "text" for c in content):
+                    out.append({"role": "user", "content": "".join(c["text"] for c in content)})
+                else:
+                    out.append({"role": "user", "content": content})
+    return _openai_repair_tool_pairs(out)
+
+_OPENAI_UNANSWERED = "Команда не была выполнена: подтверждение пользователя не получено."
+
+def _openai_repair_tool_pairs(msgs):
+    """Chat Completions rejects a history where a tool_calls turn has no tool
+    replies, or a tool reply answers no call. Both happen legitimately here:
+    the 40-turn window can cut between a call and its result, and an expired
+    confirmation leaves a call without one. Drop orphan replies and answer
+    unanswered calls with a placeholder so the request stays valid."""
+    out = []
+    pending = []  # tool_call ids awaiting a reply, in order
+    for m in msgs:
+        if m["role"] == "tool":
+            if m["tool_call_id"] in pending:
+                pending.remove(m["tool_call_id"])
+                out.append(m)
+            continue
+        for tid in pending:
+            out.append({"role": "tool", "tool_call_id": tid, "content": _OPENAI_UNANSWERED})
+        pending = [tc["id"] for tc in m.get("tool_calls", [])] if m["role"] == "assistant" else []
+        out.append(m)
+    for tid in pending:
+        out.append({"role": "tool", "tool_call_id": tid, "content": _OPENAI_UNANSWERED})
+    return out
+
 def _build_gemini_contents(messages, keep_inline_last_only=True):
     contents = []
     for idx, m in enumerate(messages):
@@ -1155,6 +1350,10 @@ def _track_usage_tokens(provider, um):
             usage["prompt_tokens"] += um.get("input_tokens", 0)
             usage["output_tokens"] += um.get("output_tokens", 0)
             return um.get("input_tokens", 0), um.get("output_tokens", 0)
+        elif provider == "openai":
+            usage["prompt_tokens"] += um.get("prompt_tokens", 0)
+            usage["output_tokens"] += um.get("completion_tokens", 0)
+            return um.get("prompt_tokens", 0), um.get("completion_tokens", 0)
         else:
             usage["prompt_tokens"] += um.get("promptTokenCount", 0)
             usage["output_tokens"] += um.get("candidatesTokenCount", 0)
@@ -1211,7 +1410,7 @@ def _call_anthropic(messages):
     }
     try:
         res = requests.post(f"{ANTHROPIC_URL}/v1/messages", json=payload,
-                            headers=_anthropic_headers(), timeout=120)
+                            headers=_anthropic_headers(), timeout=CHAT_TIMEOUT)
         data = res.json()
     except Exception as e:
         return None, {"message": str(e)}, {}
@@ -1231,6 +1430,56 @@ def _call_anthropic(messages):
             blocks.append({"type": "tool_use", "id": b.get("id", ""),
                            "name": b.get("name", "run_bash"), "input": b.get("input", {})})
     return blocks, "", data.get("usage", {})
+
+
+def _call_openai(messages):
+    if not _api_key():
+        return None, {"message": "OpenAI API key is not set. Add it in the chat settings."}, {}
+    payload = _openai_payload(_build_openai_messages(messages), 10000, tools=OPENAI_TOOLS)
+    try:
+        res = requests.post(f"{OPENAI_URL}/v1/chat/completions", json=payload,
+                            headers=_openai_headers(), timeout=CHAT_TIMEOUT)
+        data = res.json()
+    except Exception as e:
+        return None, {"message": str(e)}, {}
+    if res.status_code >= 400 or "error" in data:
+        err = data.get("error", {})
+        if isinstance(err, dict):
+            return None, {"message": err.get("message", str(err)), "code": res.status_code,
+                          "status": err.get("type") or err.get("code") or "ERROR"}, {}
+        return None, {"message": str(data), "code": res.status_code}, {}
+    choices = data.get("choices") or []
+    if not choices:
+        return None, {"message": "OpenAI returned no choices"}, {}
+    msg = choices[0].get("message", {}) or {}
+    blocks = []
+    text = msg.get("content")
+    if isinstance(text, list):  # some proxies echo the array form back
+        text = "".join(p.get("text", "") for p in text if isinstance(p, dict))
+    if text:
+        blocks.append({"type": "text", "text": text})
+    # Only the first tool call is kept: the loop answers one call per round and
+    # Chat Completions rejects a history with unanswered tool_call ids.
+    for tc in (msg.get("tool_calls") or [])[:1]:
+        fn = tc.get("function", {}) or {}
+        try:
+            args = json.loads(fn.get("arguments") or "{}")
+        except (TypeError, ValueError):
+            args = {"command": fn.get("arguments") or ""}
+        if not isinstance(args, dict):
+            args = {"command": str(args)}
+        blocks.append({"type": "tool_use", "id": tc.get("id") or f"call_{uuid.uuid4().hex[:12]}",
+                       "name": fn.get("name", "run_bash"), "input": args})
+    return blocks, "", data.get("usage", {})
+
+
+def _call_model(provider, messages):
+    """Dispatch one model round to the provider's wire format."""
+    if provider == "anthropic":
+        return _call_anthropic(messages)
+    if provider == "openai":
+        return _call_openai(messages)
+    return _call_gemini(messages)
 
 
 @app.post("/chat")
@@ -1277,10 +1526,7 @@ async def chat_endpoint(request: Request):
             del hist[:len(hist) - 40]
 
         for _ in range(10):
-            if provider == "anthropic":
-                parts, err, um = _call_anthropic(hist)
-            else:
-                parts, err, um = _call_gemini(hist)
+            parts, err, um = _call_model(provider, hist)
 
             if err:
                 # Откатываем сообщение пользователя, чтобы не засорять историю при сбое
@@ -1467,10 +1713,7 @@ async def tool_confirm(request: Request):
 
     # Continue the model loop after the tool result.
     for _ in range(10):
-        if provider == "anthropic":
-            parts, err, um = _call_anthropic(hist)
-        else:
-            parts, err, um = _call_gemini(hist)
+        parts, err, um = _call_model(provider, hist)
         if err:
             print(f"⚠ [MODEL-ERR] continuation: {json.dumps(err, ensure_ascii=False)}")
             if hist and hist[-1].get("role") == "user":
@@ -1602,6 +1845,18 @@ async def set_provider(request: Request):
     return Response(content=json.dumps({"error": "invalid"}, ensure_ascii=False),
                     status_code=400, media_type="application/json")
 
+# /v1/models mixes chat models with embeddings, audio, image and moderation
+# endpoints; keep only the ones Chat Completions will accept.
+_OPENAI_NON_CHAT = ("embedding", "whisper", "tts", "dall-e", "moderation", "realtime",
+                    "audio", "transcribe", "image", "search", "instruct", "babbage",
+                    "davinci", "codex", "computer-use", "sora", "-preview", "deep-research")
+
+def _openai_chat_model(model_id: str) -> bool:
+    m = model_id.lower()
+    if not (m.startswith("gpt-") or re.match(r"^o\d", m) or m.startswith("chatgpt-")):
+        return False
+    return not any(tag in m for tag in _OPENAI_NON_CHAT)
+
 @app.get("/models")
 async def list_models(request: Request):
     if not _authorize(request):
@@ -1610,6 +1865,14 @@ async def list_models(request: Request):
     models = []
     if current_provider == "anthropic":
         models = [{"id": m, "label": m} for m in pdef["default_models"]]
+    elif current_provider == "openai":
+        try:
+            res = requests.get(f"{OPENAI_URL}/v1/models", headers=_openai_headers(), timeout=5)
+            if res.status_code == 200:
+                ids = sorted(m.get("id", "") for m in res.json().get("data", []))
+                models = [{"id": m, "label": m} for m in ids if _openai_chat_model(m)]
+        except Exception:
+            pass
     else:
         try:
             url, auth = _gemini_auth("/v1beta/models")
@@ -1865,6 +2128,7 @@ async def get_settings(request: Request):
         "key_placeholder": _provider_def()["key_placeholder"],
         "worker_url": WORKER_URL,
         "anthropic_url": ANTHROPIC_URL,
+        "openai_url": OPENAI_URL,
         "system_instruction": SYSTEM_INSTRUCTION,
         "glow": glow
     }, ensure_ascii=False), status_code=200, media_type="application/json")
@@ -1886,21 +2150,28 @@ def _valid_https_url(url: str, allowed_host: str) -> bool:
 async def update_settings(request: Request):
     if not _authorize(request):
         return JSONResponse(content={"error": "unauthorized"}, status_code=401)
-    global SYSTEM_INSTRUCTION, WORKER_URL, ANTHROPIC_URL
+    global SYSTEM_INSTRUCTION, WORKER_URL, ANTHROPIC_URL, OPENAI_URL
     data = await request.json()
 
     # worker_url is fixed at startup from config.json / env and must not be
-    # switched to an attacker-supplied URL through the API.
-    if "worker_url" in data:
+    # switched to an attacker-supplied URL through the API. Echoing the current
+    # value back (the settings form round-trips every field) is not a change.
+    if "worker_url" in data and (data.get("worker_url") or "").strip() != WORKER_URL:
         return Response(content=json.dumps(
             {"error": "worker_url cannot be changed via the API; edit ~/.config/prism/config.json instead"},
             ensure_ascii=False), status_code=400, media_type="application/json")
-    if "anthropic_url" in data:
-        new_url = (data.get("anthropic_url") or "").strip()
-        if new_url and not _valid_https_url(new_url, "api.anthropic.com"):
-            return Response(content=json.dumps(
-                {"error": "anthropic_url must be an https URL on api.anthropic.com"},
-                ensure_ascii=False), status_code=400, media_type="application/json")
+    # Provider endpoints may only be pointed at the vendor's own host through
+    # the API; a proxy for a geo-blocked vendor goes into config.json, and that
+    # configured value is accepted back unchanged.
+    endpoint_fields = (("anthropic_url", "api.anthropic.com", ANTHROPIC_URL),
+                       ("openai_url", "api.openai.com", OPENAI_URL))
+    for field, host, current_val in endpoint_fields:
+        if field in data:
+            new_url = (data.get(field) or "").strip()
+            if new_url and new_url != current_val and not _valid_https_url(new_url, host):
+                return Response(content=json.dumps(
+                    {"error": f"{field} must be an https URL on {host}"},
+                    ensure_ascii=False), status_code=400, media_type="application/json")
 
     # Security: the key is stored ONLY in the OS keyring, never flushed to disk.
     if "api_key" in data:
@@ -1910,11 +2181,13 @@ async def update_settings(request: Request):
             _keyring_set(current_provider, new_key)
         else:
             _keyring_delete(current_provider)
-            PROVIDER_KEYS[current_provider] = os.environ.get(
-                "ANTHROPIC_API_KEY" if current_provider == "anthropic" else "GEMINI_API_KEY", "")
+            PROVIDER_KEYS[current_provider] = os.environ.get(_provider_env(current_provider), "")
     if "anthropic_url" in data and data["anthropic_url"]:
         ANTHROPIC_URL = data["anthropic_url"].strip()
         _config["anthropic_url"] = ANTHROPIC_URL
+    if "openai_url" in data and data["openai_url"]:
+        OPENAI_URL = data["openai_url"].strip()
+        _config["openai_url"] = OPENAI_URL
     if "system_instruction" in data:
         SYSTEM_INSTRUCTION = data["system_instruction"] if data["system_instruction"] is not None else SYSTEM_INSTRUCTION
         _config["system_instruction"] = SYSTEM_INSTRUCTION
@@ -1942,6 +2215,17 @@ async def validate_settings(request: Request):
                 return Response(content=json.dumps({"valid": True, "validated": False}, ensure_ascii=False),
                                 status_code=200, media_type="application/json")
             return Response(content=json.dumps({"valid": False, "error": "Invalid Claude API key format"}, ensure_ascii=False),
+                            status_code=200, media_type="application/json")
+        elif current_provider == "openai":
+            if not (isinstance(key, str) and key.strip().startswith("sk-")):
+                return Response(content=json.dumps({"valid": False, "error": "Invalid OpenAI API key format"}, ensure_ascii=False),
+                                status_code=200, media_type="application/json")
+            r = requests.get(f"{OPENAI_URL}/v1/models", headers=_openai_headers(key.strip()), timeout=10)
+            if r.status_code == 200:
+                n = sum(1 for m in r.json().get("data", []) if _openai_chat_model(m.get("id", "")))
+                return Response(content=json.dumps({"valid": True, "models": n}, ensure_ascii=False),
+                                status_code=200, media_type="application/json")
+            return Response(content=json.dumps({"valid": False, "error": f"HTTP {r.status_code}"}, ensure_ascii=False),
                             status_code=200, media_type="application/json")
         else:
             v_url, v_auth = _gemini_auth("/v1beta/models", key=key)

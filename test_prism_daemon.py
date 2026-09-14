@@ -80,5 +80,52 @@ def test_daemon():
     else:
         print("PASSED: _allowed_read_path()")
 
+    # Test 4: OpenAI wire format. Tool results are stored in user turns and
+    # must come out as role=tool messages that answer the preceding call.
+    prism_daemon.SYSTEM_INSTRUCTION = "SYS"
+    hist = [
+        {"role": "user", "parts": [{"type": "text", "text": "list files"}]},
+        {"role": "assistant", "parts": [{"type": "tool_use", "id": "call_1", "name": "run_bash",
+                                         "input": {"command": "ls"}}]},
+        {"role": "user", "parts": [{"type": "tool_result", "tool_use_id": "call_1",
+                                    "name": "run_bash", "content": "a b"}]},
+        {"role": "assistant", "parts": [{"type": "text", "text": "a and b"}]},
+    ]
+    msgs = prism_daemon._build_openai_messages(hist)
+    expected_roles = ["system", "user", "assistant", "tool", "assistant"]
+    if [m["role"] for m in msgs] != expected_roles or msgs[3]["tool_call_id"] != "call_1" \
+            or msgs[2]["tool_calls"][0]["function"]["arguments"] != '{"command": "ls"}':
+        print(f"FAILED: _build_openai_messages -> {msgs}")
+    else:
+        print("PASSED: _build_openai_messages()")
+
+    # Test 5: an unanswered tool call (expired confirmation) is patched so the
+    # request stays valid, and an orphan tool reply is dropped.
+    broken = [
+        {"role": "user", "parts": [{"type": "tool_result", "tool_use_id": "gone", "name": "run_bash", "content": "x"}]},
+        {"role": "assistant", "parts": [{"type": "tool_use", "id": "c9", "name": "run_bash", "input": {"command": "date"}}]},
+        {"role": "user", "parts": [{"type": "text", "text": "never mind"}]},
+    ]
+    msgs = prism_daemon._build_openai_messages(broken)
+    if [m["role"] for m in msgs] != ["system", "assistant", "tool", "user"] or msgs[2]["tool_call_id"] != "c9":
+        print(f"FAILED: _openai_repair_tool_pairs -> {msgs}")
+    else:
+        print("PASSED: _openai_repair_tool_pairs()")
+
+    # Test 6: /v1/models filter keeps chat models only
+    keep = ["gpt-5-mini", "gpt-4.1", "o3", "chatgpt-4o-latest"]
+    drop = ["whisper-1", "text-embedding-3-small", "gpt-4o-realtime-preview", "dall-e-3", "gpt-image-1"]
+    if all(prism_daemon._openai_chat_model(m) for m in keep) and not any(prism_daemon._openai_chat_model(m) for m in drop):
+        print("PASSED: _openai_chat_model()")
+    else:
+        print("FAILED: _openai_chat_model()")
+
+    # Test 7: reasoning_effort only for models that accept it
+    if prism_daemon._openai_reasoning_model("gpt-5-mini") and prism_daemon._openai_reasoning_model("o4-mini") \
+            and not prism_daemon._openai_reasoning_model("gpt-4.1") and not prism_daemon._openai_reasoning_model("gpt-5-chat-latest"):
+        print("PASSED: _openai_reasoning_model()")
+    else:
+        print("FAILED: _openai_reasoning_model()")
+
 if __name__ == "__main__":
     test_daemon()
