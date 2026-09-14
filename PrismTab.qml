@@ -28,6 +28,10 @@ Item {
     readonly property string providerLabel: GeminiChat.providerName
     readonly property string providerShape: GeminiChat.providerInfo?.logo ?? "sparkle"
     readonly property bool isClaude: GeminiChat.providerInfo?.style === "claude"
+    readonly property bool isChatGPT: GeminiChat.providerInfo?.style === "chatgpt"
+    // Claude and ChatGPT both use the boxed composer with the send button in
+    // the corner; Gemini keeps its pill.
+    readonly property bool boxedInput: isClaude || isChatGPT
 
     property bool settingsMode: false
 
@@ -1421,7 +1425,7 @@ Item {
                         width: implicitWidth
                         height: implicitHeight
                         text: root.greetings[root.greetIndex]
-                        font: Tokens.font.body.builders.large.size(root.isClaude ? 26 : 40).weight(Font.Medium).build()
+                        font: Tokens.font.body.builders.large.size(root.isClaude ? 26 : (root.isChatGPT ? 30 : 40)).weight(Font.Medium).build()
                         color: "white"
                         renderType: Text.QtRendering
                         layer.enabled: true
@@ -1430,7 +1434,8 @@ Item {
                 }
 
                 StyledText {
-                    text: root.isClaude ? qsTr("How can I help you today?") : qsTr("How can I help?")
+                    text: root.isClaude ? qsTr("How can I help you today?")
+                        : (root.isChatGPT ? qsTr("What can I help with?") : qsTr("How can I help?"))
                     font: Tokens.font.body.builders.large.size(root.isClaude ? 13 : 16).build()
                     color: Colours.palette.m3onSurfaceVariant
                     Layout.alignment: Qt.AlignHCenter
@@ -1570,7 +1575,7 @@ Item {
             id: inputPill
 
             Layout.fillWidth: true
-            visible: !root.settingsMode && !root.isClaude
+            visible: !root.settingsMode && !root.boxedInput
             implicitHeight: attachRow.visible ? 50 + 62 : 50
             radius: 25
             color: Colours.tPalette.m3surfaceContainerHigh
@@ -1811,17 +1816,25 @@ Item {
             }
         }
 
-        // Claude style: signature rounded input with bottom-right send
+        // Claude / ChatGPT style: rounded composer box with bottom-right send.
+        // Claude gets its warm paper tint, ChatGPT the neutral grey of its own
+        // composer (#F4F4F4 light / #2F2F2F dark).
         StyledRect {
             id: claudeInputBox
 
             Layout.fillWidth: true
-            visible: !root.settingsMode && root.isClaude
+            visible: !root.settingsMode && root.boxedInput
             implicitHeight: (GeminiChat.attachments.length > 0 ? 34 : 0) + 82
-            radius: 20
-            color: Colours.light
-                ? root.mixColour(Colours.palette.m3surface, "#F7EFE5", 0.85)
-                : root.mixColour(Colours.palette.m3surface, "#4A3A2C", 0.45)
+            radius: root.isChatGPT ? 24 : 20
+            color: {
+                if (root.isChatGPT)
+                    return Colours.light
+                        ? root.mixColour(Colours.palette.m3surface, "#F4F4F4", 0.85)
+                        : root.mixColour(Colours.palette.m3surface, "#2F2F2F", 0.6);
+                return Colours.light
+                    ? root.mixColour(Colours.palette.m3surface, "#F7EFE5", 0.85)
+                    : root.mixColour(Colours.palette.m3surface, "#4A3A2C", 0.45);
+            }
             border.width: claudeField.activeFocus ? 1 : 0
             border.color: Qt.alpha(GeminiChat.providerPrimary, 0.55)
 
@@ -1879,7 +1892,7 @@ Item {
                                 StyledText {
                                     text: {
                                         const n = modelData.name ?? "";
-                                        return n.length > 14 ? n.slice(0, 14) + "…" : n;
+                                        return n.length > 14 ? n.slice(0, 14) + "\u2026" : n;
                                     }
                                     font: Tokens.font.body.small
                                     color: Colours.palette.m3onSurfaceVariant
@@ -1930,7 +1943,7 @@ Item {
 
                         Text {
                             enabled: false
-                            text: qsTr("Ask %1…").arg(root.providerLabel)
+                            text: root.isChatGPT ? qsTr("Ask anything") : qsTr("Ask %1\u2026").arg(root.providerLabel)
                             color: Colours.palette.m3onSurfaceVariant
                             font: claudeField.font
                             visible: !claudeField.text && !claudeField.activeFocus
@@ -2044,6 +2057,690 @@ Item {
                                 claudeSendBounce.restart();
                                 GeminiChat.sendMessage(claudeField.text);
                             }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Disclaimer hint under the input (Google style)
+        StyledText {
+            Layout.fillWidth: true
+            visible: !root.settingsMode
+            text: qsTr("Answers from %1 may contain inaccuracies. Verify important information.").arg(root.providerLabel)
+            font: Tokens.font.body.small
+            color: Colours.palette.m3onSurfaceVariant
+            horizontalAlignment: Text.AlignHCenter
+            opacity: 0.7
+            Layout.bottomMargin: Tokens.padding.small
+        }
+
+        // ── Settings view ──────────────────────────────────────
+        Item {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            visible: root.settingsMode
+
+            Flickable {
+                anchors.fill: parent
+                anchors.margins: Tokens.padding.large
+                contentHeight: settingsCol.implicitHeight
+                clip: true
+                flickableDirection: Flickable.VerticalFlick
+                boundsBehavior: Flickable.StopAtBounds
+
+                ColumnLayout {
+                    id: settingsCol
+
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    width: Math.min(parent.width - Tokens.padding.large * 2, 560)
+                    spacing: Tokens.spacing.large
+
+                    StyledText {
+                        text: qsTr("Settings")
+                        font: Tokens.font.headline.medium
+                        color: Colours.palette.m3onSurface
+                        Layout.alignment: Qt.AlignHCenter
+                        Layout.bottomMargin: Tokens.spacing.small
+                    }
+
+                    // ── Section: API & Connection ──────────────
+                    StyledRect {
+                        Layout.fillWidth: true
+                        implicitHeight: connCol.implicitHeight + Tokens.padding.large * 2
+                        radius: Tokens.rounding.large
+                        color: Colours.tPalette.m3surfaceContainerLow
+
+                        ColumnLayout {
+                            id: connCol
+                            anchors.fill: parent
+                            anchors.margins: Tokens.padding.large
+                            spacing: Tokens.spacing.medium
+
+                            RowLayout {
+                                spacing: Tokens.spacing.small
+
+                                Rectangle {
+                                    width: 28; height: 28; radius: 14
+                                    color: Qt.alpha(GeminiChat.providerInfo?.primary ?? "#4285F4", 0.15)
+                                    MaterialIcon {
+                                        anchors.centerIn: parent
+                                        text: "key"
+                                        fontStyle: Tokens.font.icon.small
+                                        color: GeminiChat.providerInfo?.primary ?? "#4285F4"
+                                    }
+                                }
+                                StyledText {
+                                    text: qsTr("Connection")
+                                    font: Tokens.font.body.builders.medium.weight(Font.Medium).build()
+                                    color: Colours.palette.m3onSurface
+                                }
+                            }
+
+                            StyledText {
+                                text: {
+                                    if (root.isClaude)
+                                        return "API ключ Claude";
+                                    if (root.isChatGPT)
+                                        return "API ключ OpenAI";
+                                    return "API ключ Google AI Studio";
+                                }
+                                font: Tokens.font.body.small
+                                color: Colours.palette.m3onSurfaceVariant
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: Tokens.spacing.small
+
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    height: 40
+                                    radius: Tokens.rounding.medium
+                                    color: gKeyInput.activeFocus ? Qt.alpha(Colours.palette.m3primary, 0.08) : Colours.tPalette.m3surfaceContainerHigh
+
+                                    TextInput {
+                                        id: gKeyInput
+                                        anchors.fill: parent
+                                        anchors.margins: Tokens.padding.small
+                                        color: Colours.palette.m3onSurface
+                                        font: Tokens.font.body.medium
+                                        clip: true
+                                        selectByMouse: true
+                                        echoMode: TextInput.Password
+
+                                        property string lastValidated: ""
+
+                                        onActiveFocusChanged: {
+                                            if (!activeFocus && text !== lastValidated && text.length > 0) {
+                                                gValidationLabel.text = qsTr("Checking...");
+                                                gValidationLabel.color = Colours.palette.m3onSurfaceVariant;
+                                                GeminiChat.validateSettings(text, gWorkerInput.text);
+                                            }
+                                        }
+
+                                        StyledText {
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            visible: !gKeyInput.text && !gKeyInput.activeFocus
+                                            text: GeminiChat.settingsData?.api_key_set
+                                                ? (GeminiChat.settingsData?.key_placeholder ?? qsTr("Key is set \u2022\u2022\u2022"))
+                                                : (GeminiChat.settingsData?.key_placeholder ?? "AIza...")
+                                            font: Tokens.font.body.medium
+                                            color: GeminiChat.settingsData?.api_key_set ? "#a6e3a1" : Colours.palette.m3outline
+                                        }
+                                    }
+                                }
+
+                                StyledRect {
+                                    implicitWidth: 40; implicitHeight: 40
+                                    radius: Tokens.rounding.medium
+                                    color: gShowKeyArea.containsMouse ? Colours.tPalette.m3surfaceContainerHighest : Colours.tPalette.m3surfaceContainer
+
+                                    MaterialIcon {
+                                        anchors.centerIn: parent
+                                        text: gKeyInput.echoMode === TextInput.Password ? "visibility" : "visibility_off"
+                                        fontStyle: Tokens.font.icon.small
+                                        color: Colours.palette.m3onSurfaceVariant
+                                    }
+                                    MouseArea {
+                                        id: gShowKeyArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: gKeyInput.echoMode = gKeyInput.echoMode === TextInput.Password ? TextInput.Normal : TextInput.Password
+                                    }
+                                }
+                            }
+
+                            StyledText {
+                                id: gValidationLabel
+                                text: ""
+                                font: Tokens.font.body.small
+                                color: Colours.palette.m3onSurfaceVariant
+                                Layout.fillWidth: true
+
+                                Connections {
+                                    target: GeminiChat
+                                    function onSettingsValidated(result) {
+                                        gKeyInput.lastValidated = gKeyInput.text;
+                                        if (result.valid) {
+                                            gValidationLabel.text = result.models !== undefined
+                                                ? qsTr("Valid \u2022 %1 models").arg(result.models)
+                                                : qsTr("Valid");
+                                            gValidationLabel.color = "#a6e3a1";
+                                        } else {
+                                            gValidationLabel.text = result.error;
+                                            gValidationLabel.color = "#f38ba8";
+                                        }
+                                    }
+                                }
+                            }
+
+                            Rectangle { Layout.fillWidth: true; height: 1; color: Colours.palette.m3outlineVariant; opacity: 0.4 }
+
+                            StyledText {
+                                text: root.isClaude
+                                    ? "API Endpoint (Claude)"
+                                    : (root.isChatGPT
+                                        ? "API Endpoint (OpenAI)"
+                                        : "Worker URL (Cloudflare прокси, задаётся в config.json)")
+                                font: Tokens.font.body.small
+                                color: Colours.palette.m3onSurfaceVariant
+                            }
+
+                            Rectangle {
+                                Layout.fillWidth: true
+                                height: 40
+                                radius: Tokens.rounding.medium
+                                color: gWorkerInput.activeFocus ? Qt.alpha(Colours.palette.m3primary, 0.08) : Colours.tPalette.m3surfaceContainerHigh
+
+                                TextInput {
+                                    id: gWorkerInput
+                                    anchors.fill: parent
+                                    anchors.margins: Tokens.padding.small
+                                    color: Colours.palette.m3onSurface
+                                    font: Tokens.font.body.medium
+                                    clip: true
+                                    selectByMouse: true
+                                    // The Gemini worker URL is fixed at daemon start
+                                    // (the API refuses to change it), so only show it.
+                                    readOnly: !root.boxedInput
+                                    text: root.isClaude
+                                        ? (GeminiChat.settingsData?.anthropic_url ?? "https://api.anthropic.com")
+                                        : (root.isChatGPT
+                                            ? (GeminiChat.settingsData?.openai_url ?? "https://api.openai.com")
+                                            : (GeminiChat.settingsData?.worker_url ?? ""))
+
+                                    StyledText {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        visible: !gWorkerInput.text && !gWorkerInput.activeFocus
+                                        text: "https://..."
+                                        font: Tokens.font.body.medium
+                                        color: Colours.palette.m3outline
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // ── Section: System Instruction ────────────
+                    StyledRect {
+                        Layout.fillWidth: true
+                        implicitHeight: sysCol.implicitHeight + Tokens.padding.large * 2
+                        radius: Tokens.rounding.large
+                        color: Colours.tPalette.m3surfaceContainerLow
+
+                        ColumnLayout {
+                            id: sysCol
+                            anchors.fill: parent
+                            anchors.margins: Tokens.padding.large
+                            spacing: Tokens.spacing.medium
+
+                            RowLayout {
+                                spacing: Tokens.spacing.small
+                                Rectangle {
+                                    width: 28; height: 28; radius: 14
+                                    color: Qt.alpha(GeminiChat.providerInfo?.secondary ?? "#9B72CB", 0.15)
+                                    MaterialIcon {
+                                        anchors.centerIn: parent
+                                        text: "psychology"
+                                        fontStyle: Tokens.font.icon.small
+                                        color: GeminiChat.providerInfo?.secondary ?? "#9B72CB"
+                                    }
+                                }
+                                StyledText {
+                                    text: qsTr("System instruction")
+                                    font: Tokens.font.body.builders.medium.weight(Font.Medium).build()
+                                    color: Colours.palette.m3onSurface
+                                }
+                            }
+
+                            StyledText {
+                                text: qsTr("Defines how %1 behaves in chat").arg(GeminiChat.providerName)
+                                font: Tokens.font.body.small
+                                color: Colours.palette.m3onSurfaceVariant
+                            }
+
+                            Rectangle {
+                                Layout.fillWidth: true
+                                height: 120
+                                radius: Tokens.rounding.medium
+                                color: gSysInput.activeFocus ? Qt.alpha(Colours.palette.m3primary, 0.08) : Colours.tPalette.m3surfaceContainerHigh
+
+                                Flickable {
+                                    anchors.fill: parent
+                                    anchors.margins: Tokens.padding.small
+                                    contentHeight: gSysInput.implicitHeight
+                                    clip: true
+                                    flickableDirection: Flickable.VerticalFlick
+                                    boundsBehavior: Flickable.StopAtBounds
+
+                                    TextEdit {
+                                        id: gSysInput
+                                        width: parent.width
+                                        color: Colours.palette.m3onSurface
+                                        font: Tokens.font.body.medium
+                                        wrapMode: TextEdit.Wrap
+                                        selectByMouse: true
+                                        text: GeminiChat.settingsData?.system_instruction ?? ""
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // ── Section: Glow ─────────────────────────
+                    StyledRect {
+                        Layout.fillWidth: true
+                        implicitHeight: glowCol.implicitHeight + Tokens.padding.large * 2
+                        radius: Tokens.rounding.large
+                        color: Colours.tPalette.m3surfaceContainerLow
+
+                        ColumnLayout {
+                            id: glowCol
+                            anchors.fill: parent
+                            anchors.margins: Tokens.padding.large
+                            spacing: Tokens.spacing.medium
+
+                            RowLayout {
+                                spacing: Tokens.spacing.small
+                                Rectangle {
+                                    width: 28; height: 28; radius: 14
+                                    color: Qt.alpha(GeminiChat.providerInfo?.tertiary ?? "#D96570", 0.15)
+                                    MaterialIcon {
+                                        anchors.centerIn: parent
+                                        text: "blur_on"
+                                        fontStyle: Tokens.font.icon.small
+                                        color: GeminiChat.providerInfo?.tertiary ?? "#D96570"
+                                    }
+                                }
+                                StyledText {
+                                    text: "Glow оверлей"
+                                    font: Tokens.font.body.builders.medium.weight(Font.Medium).build()
+                                    color: Colours.palette.m3onSurface
+                                }
+
+                                Item { Layout.fillWidth: true }
+
+                                StyledRect {
+                                    implicitWidth: 44; implicitHeight: 24
+                                    radius: 12
+                                    color: gGlowToggle.checked ? (GeminiChat.providerInfo?.primary ?? "#4285F4") : Colours.palette.m3surfaceContainerHighest
+
+                                    Rectangle {
+                                        x: gGlowToggle.checked ? parent.width - 22 : 2
+                                        width: 20; height: 20; radius: 10
+                                        color: "white"
+                                        Behavior on x { NumberAnimation { duration: 150 } }
+                                    }
+
+                                    MouseArea {
+                                        id: gGlowToggle
+                                        property bool checked: (GeminiChat.settingsData?.glow?.enabled ?? true)
+                                        anchors.fill: parent
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: checked = !checked
+                                    }
+
+                                    Connections {
+                                        target: GeminiChat
+
+                                        function onSettingsDataChanged() {
+                                            gGlowToggle.checked = GeminiChat.settingsData?.glow?.enabled ?? true;
+                                        }
+                                    }
+                                }
+                            }
+
+                            RowLayout {
+                                spacing: Tokens.spacing.medium
+                                Layout.fillWidth: true
+
+                                ColumnLayout {
+                                    spacing: 2
+                                    Layout.fillWidth: true
+                                    StyledText { text: qsTr("Rings"); font: Tokens.font.body.small; color: Colours.palette.m3onSurfaceVariant }
+                                    RowLayout {
+                                        spacing: Tokens.spacing.small
+                                        StyledSlider {
+                                            id: gRingsSlider
+                                            Layout.fillWidth: true
+                                            from: 24; to: 192; stepSize: 8
+                                            value: GeminiChat.settingsData?.glow?.ring_count ?? 96
+                                        }
+                                        StyledText {
+                                            text: gRingsSlider.value
+                                            font: Tokens.font.label.small
+                                            color: Colours.palette.m3onSurfaceVariant
+                                            width: 32
+                                            horizontalAlignment: Text.AlignRight
+                                        }
+                                    }
+                                }
+                            }
+
+                            RowLayout {
+                                spacing: Tokens.spacing.medium
+                                Layout.fillWidth: true
+
+                                ColumnLayout {
+                                    spacing: 2
+                                    Layout.fillWidth: true
+                                    StyledText { text: "Sigma"; font: Tokens.font.body.small; color: Colours.palette.m3onSurfaceVariant }
+                                    RowLayout {
+                                        spacing: Tokens.spacing.small
+                                        StyledSlider {
+                                            id: gSigmaSlider
+                                            Layout.fillWidth: true
+                                            from: 4; to: 80; stepSize: 2
+                                            value: GeminiChat.settingsData?.glow?.sigma ?? 28
+                                        }
+                                        StyledText {
+                                            text: gSigmaSlider.value
+                                            font: Tokens.font.label.small
+                                            color: Colours.palette.m3onSurfaceVariant
+                                            width: 32
+                                            horizontalAlignment: Text.AlignRight
+                                        }
+                                    }
+                                }
+                            }
+
+                            RowLayout {
+                                spacing: Tokens.spacing.medium
+                                Layout.fillWidth: true
+
+                                ColumnLayout {
+                                    spacing: 2
+                                    Layout.fillWidth: true
+                                    StyledText { text: "Alpha"; font: Tokens.font.body.small; color: Colours.palette.m3onSurfaceVariant }
+                                    RowLayout {
+                                        spacing: Tokens.spacing.small
+                                        StyledSlider {
+                                            id: gAlphaSlider
+                                            Layout.fillWidth: true
+                                            from: 0.05; to: 1.0; stepSize: 0.05
+                                            value: GeminiChat.settingsData?.glow?.alpha ?? 0.42
+                                        }
+                                        StyledText {
+                                            text: gAlphaSlider.value.toFixed(2)
+                                            font: Tokens.font.label.small
+                                            color: Colours.palette.m3onSurfaceVariant
+                                            width: 32
+                                            horizontalAlignment: Text.AlignRight
+                                        }
+                                    }
+                                }
+                            }
+
+                            Rectangle { Layout.fillWidth: true; height: 1; color: Colours.palette.m3outlineVariant; opacity: 0.4 }
+
+                            StyledText {
+                                text: qsTr("Gradient")
+                                font: Tokens.font.body.small
+                                color: Colours.palette.m3onSurfaceVariant
+                            }
+
+                            RowLayout {
+                                spacing: Tokens.spacing.medium
+                                Layout.fillWidth: true
+
+                                Repeater {
+                                    id: gGradRepeater
+                                    model: GeminiChat.providerInfo?.gradient ?? ["#4285F4", "#9B72CB", "#D96570", "#4285F4"]
+
+                                    delegate: Rectangle {
+                                        required property int index
+                                        required property string modelData
+
+                                        Layout.fillWidth: true
+                                        height: 36
+                                        radius: Tokens.rounding.medium
+                                        color: gGradColor.containsMouse ? Qt.alpha(Colours.palette.m3primary, 0.15) : Colours.tPalette.m3surfaceContainerHigh
+
+                                        property color currentColor: modelData
+
+                                        Rectangle {
+                                            anchors.centerIn: parent
+                                            width: 24; height: 24; radius: 12
+                                            color: parent.currentColor
+                                        }
+
+                                        MouseArea {
+                                            id: gGradColor
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: {
+                                                // Simple cycle through palette for quick color pick
+                                                var palette = ["#4285F4", "#9B72CB", "#D96570", "#E9A23B", "#4FA267", "#EA6C69"];
+                                                var cur = parent.currentColor.toString().toUpperCase();
+                                                var idx = 0;
+                                                for (var i = 0; i < palette.length; i++) {
+                                                    if (palette[i].toUpperCase() === cur) { idx = (i + 1) % palette.length; break; }
+                                                }
+                                                parent.currentColor = palette[idx];
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // ── Save button ──────────────────────────
+                    StyledRect {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 44
+                        radius: Tokens.rounding.medium
+                        color: gSaveArea2.containsMouse ? root.gBlue : Colours.palette.m3primaryContainer
+
+                        MaterialIcon {
+                            anchors.centerIn: parent
+                            text: "check"
+                            fontStyle: Tokens.font.icon.small
+                            color: gSaveArea2.containsMouse ? "#ffffff" : Colours.palette.m3onPrimaryContainer
+                        }
+
+                        MouseArea {
+                            id: gSaveArea2
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                var grad = [];
+                                for (var i = 0; i < gGradRepeater.count; i++) {
+                                    var item = gGradRepeater.itemAt(i);
+                                    if (item) grad.push(item.currentColor.toString());
+                                }
+                                var payload = {
+                                    system_instruction: gSysInput.text,
+                                    glow: {
+                                        enabled: gGlowToggle.checked,
+                                        ring_count: Math.round(gRingsSlider.value),
+                                        sigma: Math.round(gSigmaSlider.value),
+                                        alpha: Math.round(gAlphaSlider.value * 100) / 100,
+                                        gradient: grad
+                                    }
+                                };
+                                // The endpoint field means a different setting per
+                                // provider; Gemini's worker URL is read-only here.
+                                if (root.isClaude)
+                                    payload.anthropic_url = gWorkerInput.text.trim();
+                                else if (root.isChatGPT)
+                                    payload.openai_url = gWorkerInput.text.trim();
+                                // Only touch the keyring when the user actually enters a key;
+                                // empty field never wipes the stored key.
+                                if (gKeyInput.text.trim().length > 0)
+                                    payload.api_key = gKeyInput.text.trim();
+                                GeminiChat.saveSettings(payload);
+                            }
+                        }
+                    }
+
+                    Item { Layout.fillWidth: true; height: Tokens.padding.small }
+                }
+            }
+        }
+    }
+
+    // ── Command confirmation modal (run_bash) ──────────────────
+    Rectangle {
+        id: confirmScrim
+
+        visible: root.confirmOpen
+        anchors.fill: parent
+        z: 200
+        color: Qt.rgba(0, 0, 0, 0.35)
+
+        MouseArea {
+            anchors.fill: parent
+            onClicked: { /* block background clicks while confirming */ }
+        }
+
+        Rectangle {
+            id: confirmCard
+
+            anchors.centerIn: parent
+            width: Math.min(root.width * 0.72, 480)
+            radius: Tokens.rounding.large
+            color: Colours.palette.m3surfaceContainerHighest
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 20
+                spacing: 14
+
+                Text {
+                    Layout.fillWidth: true
+                    text: qsTr("Подтверждение команды")
+                    font: Tokens.font.body.builders.large.size(16).weight(Font.Medium).build()
+                    color: Colours.palette.m3onSurface
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: root.confirmDangerous
+                          ? qsTr("⚠ Эта команда выглядит опасной. Выполнить?")
+                          : qsTr("Модель хочет выполнить команду:")
+                    font: Tokens.font.body.medium
+                    color: root.confirmDangerous ? GeminiChat.providerTertiary : Colours.palette.m3onSurfaceVariant
+                    wrapMode: Text.WordWrap
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    implicitHeight: Math.max(36, cmdText.implicitHeight + 14)
+                    border.width: 1
+                    border.color: Colours.palette.m3outlineVariant
+                    radius: Tokens.rounding.small
+                    color: Colours.palette.m3surface
+
+                    Text {
+                        id: cmdText
+
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.margins: 8
+                        anchors.top: parent.top
+                        anchors.topMargin: 7
+                        text: root.confirmCommand
+                        font.family: "monospace"
+                        font.pixelSize: 13
+                        color: Colours.palette.m3onSurface
+                        wrapMode: Text.WrapAnywhere
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 10
+
+                    Item { Layout.fillWidth: true }
+
+                    Rectangle {
+                        implicitWidth: 112
+                        implicitHeight: 38
+                        radius: Tokens.rounding.full
+                        color: Colours.palette.m3surfaceContainer
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: qsTr("Запретить")
+                            font: Tokens.font.body.medium
+                            color: Colours.palette.m3onSurfaceVariant
+                        }
+
+                        MouseArea {
+                            id: denyConfirmArea
+
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.confirmTool("deny")
+                        }
+                    }
+
+                    Rectangle {
+                        implicitWidth: 112
+                        implicitHeight: 38
+                        radius: Tokens.rounding.full
+                        color: GeminiChat.providerBubble
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: qsTr("Разрешить")
+                            font: Tokens.font.body.medium
+                            color: Colours.palette.m3onPrimary
+                        }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.confirmTool("allow")
+                        }
+                    }
+
+                    Rectangle {
+                        implicitWidth: 130
+                        implicitHeight: 38
+                        visible: !root.confirmDangerous
+                        radius: Tokens.rounding.full
+                        color: Colours.palette.m3primaryContainer
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: qsTr("Разрешить всегда")
+                            font: Tokens.font.body.medium
+                            color: Colours.palette.m3onPrimaryContainer
+                        }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.confirmTool("never")
                         }
                     }
                 }

@@ -1,0 +1,656 @@
+pragma Singleton
+
+import QtQuick
+import Quickshell
+import Quickshell.Io
+
+Singleton {
+    id: root
+
+    readonly property string daemonUrl: "http://127.0.0.1:5000"
+    readonly property string tokenPath: Quickshell.env("HOME") + "/.local/share/prism/daemon.token"
+
+    property string authToken: ""
+
+    FileView {
+        id: tokenFile
+        preload: true
+        blockLoading: true
+        blockAllReads: true
+        printErrors: false
+        path: root.tokenPath
+        Component.onCompleted: root.authToken = tokenFile.text().trim()
+    }
+
+    Timer {
+        interval: 30000
+        running: true
+        repeat: true
+        onTriggered: {
+            tokenFile.path = root.tokenPath;
+            root.authToken = tokenFile.text().trim();
+        }
+    }
+
+    property bool isSending: false
+    property string statusText: "Ready"
+    property string currentModel: "gemini-3.6-flash"
+    property var modelsList: []
+    property var quotaData: null
+    property string draft: ""
+    property var attachments: []
+    property var sessionsList: []
+    property string activeSessionId: ""
+    property bool watchActive: false
+    property int watchUpdated: 0
+
+    property string currentProvider: "gemini"
+    property var providersList: []
+    readonly property var providerInfo: {
+        for (let i = 0; i < providersList.length; i++) {
+            if (providersList[i].id === currentProvider)
+                return providersList[i];
+        }
+        if (providersList.length > 0)
+            return providersList[0];
+        return null;
+    }
+    readonly property string providerName: providerInfo?.name ?? "Gemini"
+    readonly property string providerBubble: providerInfo?.bubble ?? "#4285F4"
+    readonly property string providerPrimary: providerInfo?.primary ?? "#4285F4"
+    readonly property string providerSecondary: providerInfo?.secondary ?? "#9B72CB"
+    readonly property string providerTertiary: providerInfo?.tertiary ?? "#D96570"
+    readonly property var providerGradient: providerInfo?.gradient ?? ["#4285F4", "#9B72CB", "#D96570", "#4285F4"]
+
+    readonly property bool glowEnabled: settingsData?.glow?.enabled ?? true
+
+    Timer {
+        id: quotaRefreshTimer
+        interval: 30000
+        repeat: true
+        running: true
+        onTriggered: {
+            root.loadQuota();
+            root._checkDaemon();
+        }
+    }
+
+    // Start timestamp reported by /health. Everything below is fetched once
+    // at startup, so when the daemon restarts (new providers, new config) the
+    // lists would otherwise stay stale until the shell itself reloads.
+    property real daemonStarted: 0
+
+    function _checkDaemon() {
+        const xhr = _xhr();
+        xhr.open("GET", `${daemonUrl}/health`);
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState !== XMLHttpRequest.DONE || xhr.status !== 200) return;
+            let started = 0;
+            try {
+                started = JSON.parse(xhr.responseText).started ?? 0;
+            } catch (e) {}
+            if (started !== root.daemonStarted) {
+                root.daemonStarted = started;
+                root._loadAll();
+            }
+        };
+        xhr.send();
+    }
+
+    function _loadAll() {
+        loadHistory();
+        loadSessions();
+        loadCurrentModel();
+        loadModels();
+        loadQuota();
+        loadProviders();
+        loadSettings();
+    }
+
+    Timer {
+        id: titleRefresh
+        interval: 2500
+        repeat: false
+        running: false
+        onTriggered: root.loadSessions()
+    }
+
+
+    function loadHistory() {
+        const xhr = _xhr();
+        xhr.open("GET", `${daemonUrl}/history`);
+        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
+                try {
+                    const res = JSON.parse(xhr.responseText);
+                    if (res.history && res.history.length > 0) {
+                        chatModel.clear();
+                        for (let i = 0; i < res.history.length; i++) {
+                            const item = res.history[i];
+                            const role = item.role === "user" ? "user" : "assistant";
+                            let text = "";
+                            let imgs = [];
+                            if (item.parts && item.parts.length > 0) {
+                                for (let p = 0; p < item.parts.length; p++) {
+                                    if (item.parts[p].text)
+                                        text += item.parts[p].text + "\n";
+                                    else if (item.parts[p].functionCall)
+                                        text += "";
+                                    else if (item.parts[p].inline_data) {
+                                        imgs.push({
+                                            mime: item.parts[p].inline_data.mime_type || "image/png",
+                                            data: item.parts[p].inline_data.data || ""
+                                        });
+                                    }
+                                }
+                            }
+                            text = text.trim();
+                            if (text || imgs.length > 0)
+                                chatModel.append({ sender: role, text, images: imgs });
+                        }
+                    }
+                } catch (e) {}
+            }
+        };
+        xhr.send();
+    }
+
+    function clearHistory() {
+        const xhr = _xhr();
+        xhr.open("POST", `${daemonUrl}/clear`);
+        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
+                chatModel.clear();
+            }
+        };
+        xhr.send();
+    }
+
+    function addAttachment(a) {
+        if (a && a.data)
+            attachments = [...attachments, a].slice(0, 8);
+    }
+
+    function removeAttachment(index) {
+        attachments = attachments.filter((_, i) => i !== index);
+    }
+
+    function readFile(path) {
+        const xhr = _xhr();
+        xhr.open("POST", `${daemonUrl}/read_file`);
+        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
+        xhr.setRequestHeader("Content-Type", "application/json; charset=utf-8");
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
+                try {
+                    const res = JSON.parse(xhr.responseText);
+                    if (res.data) {
+                        addAttachment(res);
+                        statusText = "Ready";
+                    } else if (res.error === "too_large") {
+                        statusText = qsTr("File > 11MB");
+                    } else {
+                        statusText = qsTr("Could not read file");
+                    }
+                } catch (e) {}
+            }
+        };
+        xhr.send(JSON.stringify({ path }));
+    }
+
+    function stopWatch() {
+        const xhr = _xhr();
+        xhr.open("POST", `${daemonUrl}/watch/stop`);
+        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
+                try {
+                    const res = JSON.parse(xhr.responseText);
+                    if (res.response) {
+                        chatModel.append({ sender: "assistant", text: res.response });
+                    }
+                } catch (e) {}
+            }
+        };
+        xhr.send();
+    }
+
+    Timer {
+        interval: 2500
+        running: true
+        repeat: true
+        triggeredOnStart: true
+
+        onTriggered: {
+            const xhr = _xhr();
+            xhr.open("GET", `${daemonUrl}/watch/status`);
+            if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
+            xhr.onreadystatechange = () => {
+                if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
+                    try {
+                        const res = JSON.parse(xhr.responseText);
+                        const wasActive = watchActive;
+                        watchActive = res.active;
+                        if (res.updated > watchUpdated && res.hint) {
+                            chatModel.append({ sender: "assistant", text: "👁 " + res.hint });
+                            watchUpdated = res.updated;
+                        }
+                        if (wasActive && !res.active)
+                            watchUpdated = 0;
+                    } catch (e) {}
+                }
+            };
+            xhr.send();
+        }
+    }
+
+    function loadSessions() {
+        const xhr = _xhr();
+        xhr.open("GET", `${daemonUrl}/sessions`);
+        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
+                try {
+                    const res = JSON.parse(xhr.responseText);
+                    sessionsList = res.sessions ?? [];
+                    activeSessionId = res.active_id ?? "";
+                } catch (e) {}
+            }
+        };
+        xhr.send();
+    }
+
+    function newChat() {
+        const xhr = _xhr();
+        xhr.open("POST", `${daemonUrl}/session/new`);
+        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
+                chatModel.clear();
+                draft = "";
+                statusText = "Ready";
+                loadSessions();
+                chatReset();
+            }
+        };
+        xhr.send();
+    }
+
+    function selectSession(id) {
+        const xhr = _xhr();
+        xhr.open("POST", `${daemonUrl}/session/select`);
+        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
+        xhr.setRequestHeader("Content-Type", "application/json; charset=utf-8");
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
+                chatModel.clear();
+                loadHistory();
+                loadSessions();
+            }
+        };
+        xhr.send(JSON.stringify({ id }));
+    }
+
+    function renameSession(id, title) {
+        const xhr = _xhr();
+        xhr.open("POST", `${daemonUrl}/session/rename`);
+        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
+        xhr.setRequestHeader("Content-Type", "application/json; charset=utf-8");
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200)
+                loadSessions();
+        };
+        xhr.send(JSON.stringify({ id, title }));
+    }
+
+    function deleteSession(id) {
+        const wasActive = id === activeSessionId;
+        const xhr = _xhr();
+        xhr.open("POST", `${daemonUrl}/session/delete`);
+        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
+        xhr.setRequestHeader("Content-Type", "application/json; charset=utf-8");
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
+                loadSessions();
+                if (wasActive) {
+                    chatModel.clear();
+                    loadHistory();
+                }
+            }
+        };
+        xhr.send(JSON.stringify({ id }));
+    }
+
+    function pickFile() {
+        const xhr = _xhr();
+        xhr.open("POST", `${daemonUrl}/pick_file`);
+        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
+                try {
+                    const res = JSON.parse(xhr.responseText);
+                    if (res.path)
+                        readFile(res.path);
+                } catch (e) {}
+            }
+        };
+        xhr.send();
+    }
+
+    function pasteFromClipboard(onFail) {
+        const xhr = _xhr();
+        xhr.open("POST", `${daemonUrl}/clipboard_image`);
+        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
+                try {
+                    const res = JSON.parse(xhr.responseText);
+                    if (res.data) {
+                        addAttachment(res);
+                        statusText = "Ready";
+                    } else if (onFail) {
+                        onFail(res.error);
+                    }
+                } catch (e) {}
+            }
+        };
+        xhr.send();
+    }
+
+    function sendMessage(msg) {
+        msg = (msg || "").trim();
+        const atts = attachments;
+        console.log("[SENDDBG] sendMessage msg='" + msg + "' atts=" + atts.length + " isSending=" + isSending);
+        if ((msg === "" && atts.length === 0) || isSending)
+            return;
+
+        chatModel.append({ sender: "user", text: msg, images: atts });
+        draft = "";
+        isSending = true;
+        statusText = providerName + " думает...";
+
+        const xhr = _xhr();
+        xhr.open("POST", `${daemonUrl}/chat`);
+        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
+        xhr.setRequestHeader("Content-Type", "application/json; charset=utf-8");
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState !== XMLHttpRequest.DONE)
+                return;
+
+            if (xhr.status === 200) {
+                try {
+                    const response = JSON.parse(xhr.responseText);
+                    if (response.pending) {
+                        // run_bash needs user confirmation — keep isSending until resolved
+                        isSending = true;
+                        statusText = qsTr("Ожидание подтверждения команды…");
+                        root.toolConfirmRequested({
+                            tool_call_id: response.tool_call_id || "",
+                            command: response.command || "",
+                            dangerous: !!response.dangerous
+                        });
+                        return;
+                    }
+                    if (response.response) {
+                        chatModel.append({ sender: "assistant", text: response.response });
+                        statusText = "Ready";
+                    } else if (response.error) {
+                        chatModel.append({ sender: "assistant", text: qsTr("Error: %1").arg(response.error) });
+                        statusText = "Error";
+                    }
+                } catch (e) {
+                    chatModel.append({ sender: "assistant", text: qsTr("Error parsing response: %1").arg(e.toString()) });
+                    statusText = "Parse Error";
+                }
+            } else {
+                chatModel.append({ sender: "assistant", text: qsTr("Could not reach daemon (HTTP %1).").arg(xhr.status) });
+                statusText = "Offline";
+            }
+            isSending = false;
+            if (xhr.status === 200)
+                attachments = [];
+            if (xhr.status === 200)
+                loadSessions();
+            titleRefresh.restart();
+        };
+        xhr.send(JSON.stringify({ message: msg, attachments: atts }));
+    }
+
+    function loadModels() {
+        const xhr = _xhr();
+        xhr.open("GET", `${daemonUrl}/models`);
+        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
+                try {
+                    modelsList = JSON.parse(xhr.responseText).models;
+                } catch (e) {}
+            }
+        };
+        xhr.send();
+    }
+
+    function loadCurrentModel() {
+        const xhr = _xhr();
+        xhr.open("GET", `${daemonUrl}/model`);
+        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
+                try {
+                    currentModel = JSON.parse(xhr.responseText).model;
+                } catch (e) {}
+            }
+        };
+        xhr.send();
+    }
+
+    function selectModel(name) {
+        const xhr = _xhr();
+        xhr.open("POST", `${daemonUrl}/model`);
+        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
+        xhr.setRequestHeader("Content-Type", "application/json; charset=utf-8");
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
+                try {
+                    currentModel = JSON.parse(xhr.responseText).model;
+                } catch (e) {}
+            }
+        };
+        xhr.send(JSON.stringify({ model: name }));
+    }
+
+    function loadQuota() {
+        const xhr = _xhr();
+        xhr.open("GET", `${daemonUrl}/quota`);
+        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
+                try {
+                    quotaData = JSON.parse(xhr.responseText);
+                } catch (e) {}
+            }
+        };
+        xhr.send();
+    }
+
+    function loadProviders() {
+        const xhr = _xhr();
+        xhr.open("GET", `${daemonUrl}/providers`);
+        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
+                try {
+                    const res = JSON.parse(xhr.responseText);
+                    const prev = currentProvider;
+                    providersList = res.providers ?? [];
+                    currentProvider = res.current ?? prev;
+                } catch (e) {}
+            }
+        };
+        xhr.send();
+    }
+
+    function selectProvider(id) {
+        const xhr = _xhr();
+        xhr.open("POST", `${daemonUrl}/provider`);
+        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
+        xhr.setRequestHeader("Content-Type", "application/json; charset=utf-8");
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
+                try {
+                    const res = JSON.parse(xhr.responseText);
+                    if (res.ok) {
+                        currentProvider = res.provider;
+                        currentModel = res.model;
+                        chatModel.clear();
+                        draft = "";
+                        loadModels();
+                        loadCurrentModel();
+                        loadProviders();
+                        loadSettings();
+                        loadQuota();
+                        chatReset();
+                    }
+                } catch (e) {}
+            }
+        };
+        xhr.send(JSON.stringify({ provider: id }));
+    }
+
+    property var settingsData: null
+
+    function loadSettings() {
+        const xhr = _xhr();
+        xhr.open("GET", `${daemonUrl}/settings`);
+        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
+                try {
+                    settingsData = JSON.parse(xhr.responseText);
+                } catch (e) {}
+            }
+        };
+        xhr.send();
+    }
+
+    function saveSettings(data) {
+        const xhr = _xhr();
+        xhr.open("PUT", `${daemonUrl}/settings`);
+        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
+        xhr.setRequestHeader("Content-Type", "application/json");
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
+                loadSettings();
+            }
+        };
+        xhr.send(JSON.stringify(data));
+    }
+
+    signal settingsValidated(var result)
+    signal chatReset()
+    signal toolConfirmRequested(var info)
+
+    function confirmTool(toolCallId, decision) {
+        const xhr = _xhr();
+        xhr.open("POST", `${daemonUrl}/tool/confirm`);
+        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
+        xhr.setRequestHeader("Content-Type", "application/json; charset=utf-8");
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState !== XMLHttpRequest.DONE)
+                return;
+
+            if (xhr.status === 200) {
+                try {
+                    const response = JSON.parse(xhr.responseText);
+                    if (response.pending) {
+                        isSending = true;
+                        statusText = qsTr("Ожидание подтверждения команды…");
+                        root.toolConfirmRequested({
+                            tool_call_id: response.tool_call_id || "",
+                            command: response.command || "",
+                            dangerous: !!response.dangerous
+                        });
+                        return;
+                    }
+                    if (response.response) {
+                        chatModel.append({ sender: "assistant", text: response.response });
+                        statusText = "Ready";
+                    } else if (response.error) {
+                        chatModel.append({ sender: "assistant", text: qsTr("Error: %1").arg(response.error) });
+                        statusText = "Error";
+                    }
+                } catch (e) {
+                    chatModel.append({ sender: "assistant", text: qsTr("Error: %1").arg(e.toString()) });
+                    statusText = "Parse Error";
+                }
+            } else {
+                chatModel.append({ sender: "assistant", text: qsTr("Could not reach daemon (HTTP %1).").arg(xhr.status) });
+                statusText = "Offline";
+            }
+            isSending = false;
+            if (xhr.status === 200)
+                loadSessions();
+            titleRefresh.restart();
+        };
+        xhr.send(JSON.stringify({ tool_call_id: toolCallId, decision }));
+    }
+
+    function validateSettings(apiKey, workerUrl) {
+        const xhr = _xhr();
+        xhr.open("POST", `${daemonUrl}/settings/validate`);
+        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
+        xhr.setRequestHeader("Content-Type", "application/json");
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
+                try {
+                    settingsValidated(JSON.parse(xhr.responseText));
+                } catch (e) {}
+            }
+        };
+        const payload = {};
+        if (apiKey) payload.api_key = apiKey;
+        if (workerUrl) payload.worker_url = workerUrl;
+        xhr.send(JSON.stringify(payload));
+    }
+
+    function _xhr() {
+        return new XMLHttpRequest();
+    }
+
+    Timer {
+        id: startupRetryTimer
+        interval: 1000
+        repeat: false
+        property int attempt: 0
+        onTriggered: root._waitForDaemon()
+    }
+
+    function _waitForDaemon() {
+        const xhr = _xhr();
+        xhr.open("GET", `${daemonUrl}/health`);
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState !== XMLHttpRequest.DONE) return;
+            if (xhr.status === 200) {
+                try {
+                    root.daemonStarted = JSON.parse(xhr.responseText).started ?? 0;
+                } catch (e) {}
+                _loadAll();
+            } else if (startupRetryTimer.attempt < 30) {
+                startupRetryTimer.attempt++;
+                startupRetryTimer.start();
+            }
+        };
+        xhr.send();
+    }
+
+    Component.onCompleted: root._waitForDaemon()
+
+    ListModel {
+        id: chatModel
+    }
+
+    // Expose model to views
+    readonly property alias messages: chatModel
+}
