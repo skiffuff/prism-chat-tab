@@ -17,6 +17,9 @@ from fastapi.responses import JSONResponse
 from urllib.parse import urlparse
 
 app = FastAPI(title="AI Provider Daemon")
+# Exposed by /health so a long-lived client can notice a restart and refetch
+# everything it cached at startup (provider list, models, settings).
+DAEMON_STARTED = time.time()
 
 #
 # ── Security: applyNoCors middleware to harden against browser CSRF ─────────
@@ -1110,7 +1113,8 @@ async def watch_status(request: Request):
 
 @app.get("/health")
 async def health():
-    return Response(content=json.dumps({"status": "ok"}), status_code=200, media_type="application/json")
+    return Response(content=json.dumps({"status": "ok", "started": DAEMON_STARTED}),
+                    status_code=200, media_type="application/json")
 
 
 # ── Canonical message helpers ──────────────────────────────────
