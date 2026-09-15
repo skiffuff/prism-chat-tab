@@ -137,4 +137,6 @@ API keys stored only in OS keyring (never written to disk).
 
 **OpenAI behind a proxy:** set `"openai_url": "https://your-proxy"` in `~/.config/prism/config.json` (the API only accepts `api.openai.com`, the configured value is kept as-is)
 
+**Claude greets you by your login name:** set `PRISM_USER_NAME="Your Name"` in the shell's environment (systemd user unit or Hyprland env) to change it
+
 **Screen recording not working:** Install `wf-recorder` (Wayland) or `ffmpeg`, verify `export DISPLAY=:0`

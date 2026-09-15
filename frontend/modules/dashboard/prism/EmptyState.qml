@@ -3,7 +3,6 @@ import QtQuick.Layouts
 import Quickshell
 import Caelestia.Config
 import qs.components
-import qs.components.effects
 import qs.services
 import qs.modules.dashboard
 
@@ -16,8 +15,10 @@ ColumnLayout {
 
     required property var tab
 
+    // claude.ai greets by first name; the closest thing a desktop has is the
+    // login name. Set PRISM_USER_NAME in the shell's environment to override.
     readonly property string userName: {
-        const u = Quickshell.env("USER") || "";
+        const u = Quickshell.env("PRISM_USER_NAME") || Quickshell.env("USER") || "";
         return u ? u.charAt(0).toUpperCase() + u.slice(1) : qsTr("there");
     }
 
@@ -91,9 +92,9 @@ ColumnLayout {
 
         // Snap the gradient to the new palette the moment the provider changes
         function onCurrentProviderChanged() {
-            greetFill.c0 = GeminiChat.providerPrimary;
-            greetFill.c1 = GeminiChat.providerSecondary;
-            greetFill.c2 = GeminiChat.providerTertiary;
+            greetGradient.c0 = GeminiChat.providerPrimary;
+            greetGradient.c1 = GeminiChat.providerSecondary;
+            greetGradient.c2 = GeminiChat.providerTertiary;
             greetGradAnim.restart();
             root.greetIndex = Math.min(root.greetIndex, root.greetings.length - 1);
         }
@@ -131,88 +132,51 @@ ColumnLayout {
                 tintAmount: 1
             }
 
-            Item {
-                width: greetMask.implicitWidth
-                height: greetMask.implicitHeight
+            // Gemini: provider gradient flowing through the glyphs
+            GradientText {
+                id: greetGradient
 
-                // Gemini: provider gradient flowing through the glyphs
-                Rectangle {
-                    id: greetFill
+                visible: root.tab.isGemini
+                anchors.verticalCenter: parent.verticalCenter
+                text: root.greetings[Math.min(root.greetIndex, root.greetings.length - 1)]
+                font: Tokens.font.body.builders.large.size(26).weight(Font.Medium).build()
+                c0: GeminiChat.providerPrimary
+                c1: GeminiChat.providerSecondary
+                c2: GeminiChat.providerTertiary
 
-                    anchors.fill: parent
-                    visible: root.tab.isGemini
+                SequentialAnimation {
+                    id: greetGradAnim
 
-                    property color c0: GeminiChat.providerPrimary
-                    property color c1: GeminiChat.providerSecondary
-                    property color c2: GeminiChat.providerTertiary
+                    running: root.tab.isGemini && root.visible
+                    loops: Animation.Infinite
 
-                    gradient: Gradient {
-                        orientation: Gradient.Horizontal
-
-                        GradientStop {
-                            position: 0
-                            color: greetFill.c0
-                        }
-                        GradientStop {
-                            position: 0.5
-                            color: greetFill.c1
-                        }
-                        GradientStop {
-                            position: 1
-                            color: greetFill.c2
-                        }
+                    ParallelAnimation {
+                        ColorAnimation { target: greetGradient; property: "c0"; to: GeminiChat.providerSecondary; duration: 1400; easing.type: Easing.InOutSine }
+                        ColorAnimation { target: greetGradient; property: "c1"; to: GeminiChat.providerTertiary; duration: 1400; easing.type: Easing.InOutSine }
+                        ColorAnimation { target: greetGradient; property: "c2"; to: GeminiChat.providerPrimary; duration: 1400; easing.type: Easing.InOutSine }
                     }
-
-                    layer.enabled: true
-                    layer.effect: Mask {
-                        maskSource: greetMask
+                    ParallelAnimation {
+                        ColorAnimation { target: greetGradient; property: "c0"; to: GeminiChat.providerTertiary; duration: 1400; easing.type: Easing.InOutSine }
+                        ColorAnimation { target: greetGradient; property: "c1"; to: GeminiChat.providerPrimary; duration: 1400; easing.type: Easing.InOutSine }
+                        ColorAnimation { target: greetGradient; property: "c2"; to: GeminiChat.providerSecondary; duration: 1400; easing.type: Easing.InOutSine }
                     }
-
-                    SequentialAnimation {
-                        id: greetGradAnim
-
-                        running: root.tab.isGemini && root.visible
-                        loops: Animation.Infinite
-
-                        ParallelAnimation {
-                            ColorAnimation { target: greetFill; property: "c0"; to: GeminiChat.providerSecondary; duration: 1400; easing.type: Easing.InOutSine }
-                            ColorAnimation { target: greetFill; property: "c1"; to: GeminiChat.providerTertiary; duration: 1400; easing.type: Easing.InOutSine }
-                            ColorAnimation { target: greetFill; property: "c2"; to: GeminiChat.providerPrimary; duration: 1400; easing.type: Easing.InOutSine }
-                        }
-                        ParallelAnimation {
-                            ColorAnimation { target: greetFill; property: "c0"; to: GeminiChat.providerTertiary; duration: 1400; easing.type: Easing.InOutSine }
-                            ColorAnimation { target: greetFill; property: "c1"; to: GeminiChat.providerPrimary; duration: 1400; easing.type: Easing.InOutSine }
-                            ColorAnimation { target: greetFill; property: "c2"; to: GeminiChat.providerSecondary; duration: 1400; easing.type: Easing.InOutSine }
-                        }
-                        ParallelAnimation {
-                            ColorAnimation { target: greetFill; property: "c0"; to: GeminiChat.providerPrimary; duration: 1400; easing.type: Easing.InOutSine }
-                            ColorAnimation { target: greetFill; property: "c1"; to: GeminiChat.providerSecondary; duration: 1400; easing.type: Easing.InOutSine }
-                            ColorAnimation { target: greetFill; property: "c2"; to: GeminiChat.providerTertiary; duration: 1400; easing.type: Easing.InOutSine }
-                        }
+                    ParallelAnimation {
+                        ColorAnimation { target: greetGradient; property: "c0"; to: GeminiChat.providerPrimary; duration: 1400; easing.type: Easing.InOutSine }
+                        ColorAnimation { target: greetGradient; property: "c1"; to: GeminiChat.providerSecondary; duration: 1400; easing.type: Easing.InOutSine }
+                        ColorAnimation { target: greetGradient; property: "c2"; to: GeminiChat.providerTertiary; duration: 1400; easing.type: Easing.InOutSine }
                     }
                 }
+            }
 
-                // Glyph source for the mask; also the plain rendering for
-                // ChatGPT (system sans) and Claude (serif).
-                StyledText {
-                    id: greetMask
-
-                    visible: !root.tab.isGemini
-                    width: implicitWidth
-                    height: implicitHeight
-                    text: root.greetings[Math.min(root.greetIndex, root.greetings.length - 1)]
-                    font: {
-                        if (root.tab.isClaude)
-                            return Tokens.font.body.builders.large.family("Noto Serif").size(26).weight(Font.Normal).build();
-                        if (root.tab.isChatGPT)
-                            return Tokens.font.body.builders.large.size(18).weight(Font.Medium).build();
-                        return Tokens.font.body.builders.large.size(26).weight(Font.Medium).build();
-                    }
-                    color: root.tab.isGemini ? "white" : Colours.palette.m3onSurface
-                    renderType: Text.QtRendering
-                    layer.enabled: root.tab.isGemini
-                    layer.smooth: false
-                }
+            // ChatGPT (system sans) and Claude (serif): plain text
+            StyledText {
+                visible: !root.tab.isGemini
+                anchors.verticalCenter: parent.verticalCenter
+                text: root.greetings[Math.min(root.greetIndex, root.greetings.length - 1)]
+                font: root.tab.isClaude
+                    ? Tokens.font.body.builders.large.family("Noto Serif").size(26).weight(Font.Normal).build()
+                    : Tokens.font.body.builders.large.size(18).weight(Font.Medium).build()
+                color: Colours.palette.m3onSurface
             }
         }
     }

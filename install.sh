@@ -51,6 +51,7 @@ modules/dashboard/prism/ComposerField.qml
 modules/dashboard/prism/ComposerGlow.qml
 modules/dashboard/prism/ComposerPill.qml
 modules/dashboard/prism/EmptyState.qml
+modules/dashboard/prism/GradientText.qml
 modules/dashboard/prism/HistoryDrawer.qml
 modules/dashboard/prism/MessageList.qml
 modules/dashboard/prism/ModelsPanel.qml
