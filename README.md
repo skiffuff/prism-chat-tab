@@ -20,23 +20,52 @@ export GEMINI_API_KEY=your_key      # or ANTHROPIC_API_KEY=... / OPENAI_API_KEY=
 ~/.local/share/prism/venv/bin/python ~/.local/share/prism/prism_daemon.py
 ```
 
-The tab will appear in the Caelestia dashboard after a restart.
+The tab will appear in the Caelestia dashboard after a restart. Working from
+a checkout instead, `scripts/deploy-local.sh` copies the backend to
+`~/.local/share/prism` and the frontend over your shell tree, then restarts
+the daemon service.
+
+## Layout
+
+```
+backend/
+  prism_daemon.py        entry point (python prism_daemon.py)
+  prism/
+    config.py            paths, provider registry, runtime state, config.json
+    security.py          token, rate limit, file policy, run_bash sandbox
+    sessions.py          chat sessions and usage counters
+    screen.py            screen watching, clipboard, file picker
+    providers/           gemini.py / anthropic.py / openai.py + canonical blocks
+    api/                 FastAPI routers (chat, providers, sessions, files, settings, watch)
+  tests/test_daemon.py   offline suite (sandboxed HOME, fake OpenAI upstream)
+frontend/                overlay onto the Caelestia shell root
+  modules/dashboard/PrismTab.qml       state + layout
+  modules/dashboard/prism/*.qml        TopBar, EmptyState, composers, panels,
+                                       SettingsPane, PermissionDialog, ...
+  modules/dashboard/GeminiLogo.qml     provider marks (sparkle / Claude / OpenAI)
+  services/GeminiChat.qml              daemon client singleton
+```
 
 ---
 
 ## Features
 
-**Tab (PrismTab.qml)**
-- Collapsible sidebar with smooth width animation
-- Multiple chat sessions with auto-title (20 chars)
-- Daemon health indicator (green/red dot, 10s poll)
-- Exec message styling (monospace, dark bg, yellow border)
-- Timestamps on every message
+**Tab (frontend/)**
+- Per-provider look: Gemini's gradient greeting and glow, ChatGPT's plain
+  greeting with starter prompts and neutral pill, Claude's serif greeting,
+  boxed composer and chips
+- History drawer with rename / delete, provider, model and quota dropdowns
+- run_bash confirmation in the style of opencode's permission prompt
+  (Allow once / Allow always / Reject, keyboard driven)
+- Settings: API key (OS keyring only), provider endpoint, system instruction,
+  glow overlay
 
 **Daemon (backend/prism_daemon.py)**
 - Multi-provider: Google Gemini, Claude and ChatGPT (OpenAI Chat Completions)
 - Direct API or Cloudflare worker routing
-- `run_bash` tool for shell commands
+- `run_bash` tool: allowlisted read-only commands, `shell=False`, output
+  capped, credential paths refused, every command confirmed unless the user
+  stored an allow-pattern (never for dangerous or network commands)
 - Screen recording & analysis (wf-recorder/ffmpeg)
 - Clipboard image support (Wayland)
 - File picker via zenity
