@@ -37,7 +37,6 @@ backend/
     screen.py            screen watching, clipboard, file picker
     providers/           gemini.py / anthropic.py / openai.py + canonical blocks
     api/                 FastAPI routers (chat, providers, sessions, files, settings, watch)
-  tests/test_daemon.py   offline suite (sandboxed HOME, fake OpenAI upstream)
 frontend/                overlay onto the Caelestia shell root
   modules/dashboard/PrismTab.qml       state + layout
   modules/dashboard/prism/*.qml        TopBar, EmptyState, composers, panels,
