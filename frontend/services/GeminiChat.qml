@@ -142,6 +142,11 @@ Singleton {
                                             mime: item.parts[p].inline_data.mime_type || "image/png",
                                             data: item.parts[p].inline_data.data || ""
                                         });
+                                    } else if (item.parts[p].type === "image") {
+                                        imgs.push({
+                                            mime: item.parts[p].mime || "image/png",
+                                            data: item.parts[p].data || ""
+                                        });
                                     }
                                 }
                             }
@@ -331,7 +336,9 @@ Singleton {
             if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
                 try {
                     const res = JSON.parse(xhr.responseText);
-                    if (res.path)
+                    if (res.data)
+                        addAttachment(res);
+                    else if (res.path)
                         readFile(res.path);
                 } catch (e) {}
             }
@@ -389,7 +396,8 @@ Singleton {
                         root.toolConfirmRequested({
                             tool_call_id: response.tool_call_id || "",
                             command: response.command || "",
-                            dangerous: !!response.dangerous
+                            dangerous: !!response.dangerous,
+                            persistable: response.persistable !== false
                         });
                         return;
                     }
@@ -570,7 +578,8 @@ Singleton {
                         root.toolConfirmRequested({
                             tool_call_id: response.tool_call_id || "",
                             command: response.command || "",
-                            dangerous: !!response.dangerous
+                            dangerous: !!response.dangerous,
+                            persistable: response.persistable !== false
                         });
                         return;
                     }
