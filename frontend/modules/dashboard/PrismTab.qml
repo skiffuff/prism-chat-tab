@@ -45,6 +45,9 @@ Item {
     property bool confirmDangerous: false
     // false for network commands: they may run once but never be auto-allowed
     property bool confirmPersistable: true
+    // Patterns "Allow always" may store, most general first, and the chosen one
+    property var confirmPatterns: []
+    property int confirmPatternIndex: 0
 
     function mixColour(a: color, b: color, t: real): color {
         return Qt.rgba(
@@ -90,7 +93,7 @@ Item {
         root.pendingToolCallId = "";
         root.confirmOpen = false;
         if (id !== "")
-            GeminiChat.confirmTool(id, decision);
+            GeminiChat.confirmTool(id, decision, decision === "never" ? (root.confirmPatterns[root.confirmPatternIndex] || "") : "");
     }
 
     Connections {
@@ -103,6 +106,8 @@ Item {
             root.confirmCommand = info.command || "";
             root.confirmDangerous = !!info.dangerous;
             root.confirmPersistable = info.persistable !== false;
+            root.confirmPatterns = info.patterns || [];
+            root.confirmPatternIndex = 0;
             root.confirmOpen = true;
         }
     }

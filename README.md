@@ -60,14 +60,18 @@ frontend/                overlay onto the Caelestia shell root
   (Allow once / Allow always / Reject, keyboard driven)
 - Settings with a section list: Connection (key in the OS keyring, test /
   remove, provider endpoint), Behaviour (system instruction), Appearance
-  (glow overlay), Permissions (revoke "Allow always" patterns)
+  (glow overlay), Permissions (allow / deny rules for run_bash)
 
 **Daemon (backend/prism_daemon.py)**
 - Multi-provider: Google Gemini, Claude and ChatGPT (OpenAI Chat Completions)
 - Direct API or Cloudflare worker routing
 - `run_bash` tool: allowlisted read-only commands, `shell=False`, output
-  capped, credential paths refused, every command confirmed unless the user
-  stored an allow-pattern (never for dangerous or network commands)
+  capped, credential paths refused. Every call is evaluated first: a command
+  that could never run (outside the allowlist, protected path) or that hits a
+  deny rule is refused without prompting; an allow rule runs it; everything
+  else asks. "Allow always" stores the pattern you pick in the prompt —
+  `ls *` or the exact command — never for dangerous or network commands.
+  Unanswered prompts time out into a recorded denial.
 - Screen recording & analysis (wf-recorder/ffmpeg)
 - Clipboard image support (Wayland)
 - File picker via zenity
@@ -117,7 +121,7 @@ frontend/                overlay onto the Caelestia shell root
 | `/pick_file` | POST | Open file picker |
 | `/settings` | GET / PUT | Get / update settings |
 | `/settings/validate` | POST | Validate API key |
-| `/permissions` | GET / DELETE | List / revoke "Allow always" patterns |
+| `/permissions` | GET / POST / DELETE | List / add or flip / remove allow-deny rules |
 
 ## Security
 

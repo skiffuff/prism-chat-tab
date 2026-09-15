@@ -397,7 +397,8 @@ Singleton {
                             tool_call_id: response.tool_call_id || "",
                             command: response.command || "",
                             dangerous: !!response.dangerous,
-                            persistable: response.persistable !== false
+                            persistable: response.persistable !== false,
+                            patterns: response.patterns || []
                         });
                         return;
                     }
@@ -565,8 +566,10 @@ Singleton {
         xhr.send(JSON.stringify(data));
     }
 
-    // "Allow always" patterns stored by the daemon (~/.config/prism/permissions.json)
+    // Permission rules stored by the daemon (~/.config/prism/permissions.json):
+    // [{pattern, action: "allow"|"deny", added}]
     property var permissions: []
+    signal permissionError(string error)
 
     function loadPermissions() {
         const xhr = _xhr();
@@ -575,23 +578,45 @@ Singleton {
         xhr.onreadystatechange = () => {
             if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
                 try {
-                    permissions = JSON.parse(xhr.responseText).patterns || [];
+                    permissions = JSON.parse(xhr.responseText).rules || [];
                 } catch (e) {}
             }
         };
         xhr.send();
     }
 
-    function revokePermission(pattern) {
+    function _permissionRequest(method, body) {
         const xhr = _xhr();
-        xhr.open("DELETE", `${daemonUrl}/permissions`);
+        xhr.open(method, `${daemonUrl}/permissions`);
         if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
         xhr.setRequestHeader("Content-Type", "application/json");
         xhr.onreadystatechange = () => {
-            if (xhr.readyState === XMLHttpRequest.DONE)
-                loadPermissions();
+            if (xhr.readyState !== XMLHttpRequest.DONE)
+                return;
+            if (xhr.status === 200) {
+                try {
+                    permissions = JSON.parse(xhr.responseText).rules || [];
+                } catch (e) {
+                    loadPermissions();
+                }
+                return;
+            }
+            let err = qsTr("Request failed (%1)").arg(xhr.status);
+            try {
+                err = JSON.parse(xhr.responseText).error || err;
+            } catch (e) {}
+            permissionError(err);
         };
-        xhr.send(JSON.stringify({ pattern: pattern }));
+        xhr.send(JSON.stringify(body));
+    }
+
+    // Add or update a rule; the daemon validates allow-rules against its allowlist
+    function setPermission(pattern, action) {
+        _permissionRequest("POST", { pattern: pattern, action: action });
+    }
+
+    function revokePermission(pattern) {
+        _permissionRequest("DELETE", { pattern: pattern });
     }
 
     signal settingsSaved(bool ok, string error)
@@ -599,7 +624,7 @@ Singleton {
     signal chatReset()
     signal toolConfirmRequested(var info)
 
-    function confirmTool(toolCallId, decision) {
+    function confirmTool(toolCallId, decision, pattern) {
         const xhr = _xhr();
         xhr.open("POST", `${daemonUrl}/tool/confirm`);
         if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
@@ -618,7 +643,8 @@ Singleton {
                             tool_call_id: response.tool_call_id || "",
                             command: response.command || "",
                             dangerous: !!response.dangerous,
-                            persistable: response.persistable !== false
+                            persistable: response.persistable !== false,
+                            patterns: response.patterns || []
                         });
                         return;
                     }
@@ -633,6 +659,11 @@ Singleton {
                     chatModel.append({ sender: "assistant", text: qsTr("Error: %1").arg(e.toString()) });
                     statusText = "Parse Error";
                 }
+            } else if (xhr.status === 410 || xhr.status === 404 || xhr.status === 409) {
+                // Timed out (the daemon recorded a denial) or settled elsewhere;
+                // the history already tells the story.
+                statusText = xhr.status === 410 ? qsTr("Confirmation expired") : "Ready";
+                loadHistory();
             } else {
                 chatModel.append({ sender: "assistant", text: qsTr("Could not reach daemon (HTTP %1).").arg(xhr.status) });
                 statusText = "Offline";
@@ -642,7 +673,10 @@ Singleton {
                 loadSessions();
             titleRefresh.restart();
         };
-        xhr.send(JSON.stringify({ tool_call_id: toolCallId, decision }));
+        const body = { tool_call_id: toolCallId, decision };
+        if (pattern)
+            body.pattern = pattern;
+        xhr.send(JSON.stringify(body));
     }
 
     function validateSettings(apiKey, workerUrl) {

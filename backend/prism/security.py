@@ -427,38 +427,69 @@ def run_bash(command: str, env: dict) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════
-# Allow-patterns ("always allow") and pending confirmations
+# Permission rules and pending confirmations
 # ══════════════════════════════════════════════════════════════════════
+#
+# Every run_bash call is first evaluated to one of three actions:
+#
+#   deny   the command cannot run at all (binary outside the allowlist, a
+#          protected path, a parse error) or a stored deny-rule matches; the
+#          model gets the reason straight away and the user is not asked
+#   allow  a stored allow-rule matches and the command is not dangerous
+#   ask    everything else: parked until the user decides in the tab
+#
+# Rules live in ~/.config/prism/permissions.json as
+# {"rules": [{"pattern": "ls *", "action": "allow"|"deny", "added": ts}]}
+# and are matched fnmatch-style, deny before allow.
 
-def allowed_patterns() -> list:
-    """Globally-allowed command patterns, re-read from disk on every call."""
+RULE_ACTIONS = ("allow", "deny")
+MAX_RULE_PATTERN = 256
+
+
+def load_rules() -> list:
+    """Stored rules, re-read from disk on every call; malformed entries dropped."""
     try:
         if os.path.exists(PERMISSIONS_FILE):
             with open(PERMISSIONS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            rules = data if isinstance(data, list) else data.get("rules", []) if isinstance(data, dict) else []
-            return [p.get("pattern", "") for p in rules
-                    if isinstance(p, dict) and p.get("action") == "allow" and p.get("pattern")]
+            raw = data if isinstance(data, list) else data.get("rules", []) if isinstance(data, dict) else []
+            rules = []
+            for r in raw:
+                if not isinstance(r, dict) or not isinstance(r.get("pattern"), str) or not r["pattern"].strip():
+                    continue
+                action = r.get("action") if r.get("action") in RULE_ACTIONS else "allow"
+                rules.append({"pattern": r["pattern"].strip(), "action": action, "added": r.get("added") or 0})
+            return rules
     except (OSError, ValueError):
         pass
     return []
 
 
-def _save_allowed_patterns(patterns) -> None:
+def save_rules(rules) -> None:
     try:
         os.makedirs(os.path.dirname(PERMISSIONS_FILE), exist_ok=True)
         with open(PERMISSIONS_FILE, "w", encoding="utf-8") as f:
-            json.dump({"rules": [{"pattern": p, "action": "allow"} for p in patterns]}, f, indent=2)
+            json.dump({"rules": rules}, f, indent=2, ensure_ascii=False)
         os.chmod(PERMISSIONS_FILE, 0o600)
     except OSError:
         pass
+
+
+def allowed_patterns() -> list:
+    return [r["pattern"] for r in load_rules() if r["action"] == "allow"]
+
+
+def _save_allowed_patterns(patterns) -> None:
+    """Replace the allow-rules (deny-rules are kept). Used by tests."""
+    keep = [r for r in load_rules() if r["action"] != "allow"]
+    save_rules(keep + [{"pattern": p, "action": "allow", "added": int(time.time())} for p in patterns])
 
 
 def matches_pattern(command: str, pattern: str) -> bool:
     """fnmatch-style check ('git *' matches 'git status' but not 'git status | rm -rf')."""
     p = (pattern or "").strip().lower()
     c = (command or "").strip().lower()
-    if is_dangerous(command):
+    if not p or not c:
         return False
     if fnmatch.fnmatch(c, p):
         return True
@@ -466,40 +497,144 @@ def matches_pattern(command: str, pattern: str) -> bool:
     return p.endswith(" *") and c == p[:-2]
 
 
+def matching_rule(command: str):
+    """The rule that decides this command, deny-rules first; None when none match."""
+    rules = load_rules()
+    for action in ("deny", "allow"):
+        for r in rules:
+            if r["action"] == action and matches_pattern(command, r["pattern"]):
+                return r
+    return None
+
+
 def command_ok_by_pattern(command: str) -> bool:
-    """Does the command match a stored allow-pattern (and is it not dangerous)?"""
+    """Does a stored allow-rule cover the command (and is it not dangerous)?"""
     if is_dangerous(command):
         return False
-    return any(pat and matches_pattern(command, pat) for pat in allowed_patterns())
+    r = matching_rule(command)
+    return bool(r and r["action"] == "allow")
 
 
-def grant_pattern(command: str) -> bool:
-    """Persist an allow-pattern for a command (safe, non-network ones only).
+def pattern_candidates(command: str) -> list:
+    """Patterns the user may store for this command, most general first.
 
-    Simple commands are stored as their leading word plus a wildcard
-    ("git status" -> "git *"); anything with shell metacharacters is stored
-    verbatim so it only ever matches itself.
+    A simple command offers its leading word plus a wildcard ("ls *") and
+    the exact command; anything with shell metacharacters is offered
+    verbatim only, so a stored rule can never widen to other commands.
     """
-    pat = (command or "").strip()
-    if not pat or not can_persist(pat):
+    cmd = (command or "").strip()
+    if not cmd:
+        return []
+    if re.search(r"[|>;&`$*?\[\]{}()\\]", cmd):
+        return [cmd]
+    first = cmd.split()[0][:64]
+    out = [first + " *"]
+    if cmd != first and cmd != first + " *":
+        out.append(cmd)
+    return out
+
+
+def rule_pattern_error(pattern: str, action: str) -> str:
+    """Why a hand-written rule is not acceptable, or '' when it is fine."""
+    pat = (pattern or "").strip()
+    if not pat or len(pat) > MAX_RULE_PATTERN:
+        return f"pattern must be 1-{MAX_RULE_PATTERN} characters"
+    if action not in RULE_ACTIONS:
+        return 'action must be "allow" or "deny"'
+    if action == "deny":
+        return ""
+    # An allow-rule must name one allowlisted, non-network binary and may
+    # not start with a wildcard: "*" or "* -rf" would cover everything.
+    first = pat.split()[0]
+    if any(ch in first for ch in "*?[]"):
+        return "an allow pattern must start with a command name, not a wildcard"
+    binary = first.split("/")[-1].lower()
+    if binary not in ALLOWED_COMMANDS:
+        return f"'{binary}' is not in the allowed command list, so it can never run"
+    if binary in NETWORK_EGRESS_COMMANDS:
+        return f"'{binary}' reaches the network and cannot be allowed permanently"
+    if is_dangerous(pat.replace("*", "x")):
+        return "this pattern is on the dangerous list and cannot be allowed permanently"
+    return ""
+
+
+def add_rule(pattern: str, action: str) -> str:
+    """Store or update a rule; returns an error message or ''."""
+    err = rule_pattern_error(pattern, action)
+    if err:
+        return err
+    pat = pattern.strip()
+    rules = [r for r in load_rules() if r["pattern"] != pat]
+    rules.append({"pattern": pat, "action": action, "added": int(time.time())})
+    save_rules(rules)
+    return ""
+
+
+def remove_rule(pattern: str) -> bool:
+    """Drop a stored rule; False when it was not there."""
+    rules = load_rules()
+    kept = [r for r in rules if r["pattern"] != pattern]
+    if len(kept) == len(rules):
         return False
-    if not re.search(r"[|>;&`$*?\[\]{}()\\]", pat):
-        first = pat.split()[0][:64]
-        pat = first + " *"
-    patterns = allowed_patterns()
-    if pat not in patterns:
-        patterns.append(pat)
-        _save_allowed_patterns(patterns)
+    save_rules(kept)
     return True
 
 
-def revoke_pattern(pattern: str) -> bool:
-    """Drop a stored allow-pattern; False when it was not there."""
-    patterns = allowed_patterns()
-    if pattern not in patterns:
+revoke_pattern = remove_rule
+
+
+def grant_pattern(command: str, pattern: str = None) -> bool:
+    """Persist an allow-rule for a command (safe, non-network ones only).
+
+    `pattern` must be one of pattern_candidates(command); without it the
+    most general candidate is stored.
+    """
+    cmd = (command or "").strip()
+    if not cmd or not can_persist(cmd):
         return False
-    _save_allowed_patterns([p for p in patterns if p != pattern])
-    return True
+    candidates = pattern_candidates(cmd)
+    pat = (pattern or "").strip() or (candidates[0] if candidates else "")
+    if pat not in candidates:
+        return False
+    return add_rule(pat, "allow") == ""
+
+
+def evaluate(command: str) -> dict:
+    """Decide what happens to a run_bash call before anything runs.
+
+    Returns {"action": "deny"|"allow"|"ask", "reason": str, "rule": pattern|None,
+             "dangerous": bool, "persistable": bool, "patterns": [...]}.
+    Static blocks come first: a command that could never run is refused
+    without bothering the user.
+    """
+    cmd = (command or "").strip()
+    info = {"action": "ask", "reason": "", "rule": None,
+            "dangerous": is_dangerous(cmd), "persistable": can_persist(cmd),
+            "patterns": pattern_candidates(cmd) if can_persist(cmd) else []}
+    try:
+        args = shlex.split(cmd)
+    except ValueError as e:
+        info.update(action="deny", reason=f"Command parsing error: {e}")
+        return info
+    if not args:
+        info.update(action="deny", reason="Command is empty.")
+        return info
+    binary = args[0].split("/")[-1].lower()
+    if binary not in ALLOWED_COMMANDS:
+        info.update(action="deny", reason=f"Command '{args[0]}' is not in the allowed list of read-only commands.")
+        return info
+    blocked = _blocked_argument(args)
+    if blocked:
+        info.update(action="deny", reason=f"Access to '{blocked}' is blocked: it points at protected credentials or daemon state.")
+        return info
+    rule = matching_rule(cmd)
+    if rule and rule["action"] == "deny":
+        info.update(action="deny", rule=rule["pattern"],
+                    reason=f"The user has a rule that always rejects commands matching '{rule['pattern']}'.")
+        return info
+    if rule and rule["action"] == "allow" and not info["dangerous"]:
+        info.update(action="allow", rule=rule["pattern"], reason=f"Allowed by the rule '{rule['pattern']}'.")
+    return info
 
 
 PENDING_CONFIRM_TTL = 120   # seconds before an unanswered prompt counts as denied
@@ -511,9 +646,14 @@ pending_confirm = {}
 pending_lock = threading.Lock()
 
 
-def expire_pending() -> None:
-    """Deny timed-out confirmations, then reap ones nobody will read again."""
+def expire_pending() -> list:
+    """Deny timed-out confirmations, then reap ones nobody will read again.
+
+    Returns the entries that were denied by this call (with their tool id
+    as "tool_id") so the caller can record the denial in the conversation.
+    """
     now = time.time()
+    expired = []
     with pending_lock:
         for k, v in list(pending_confirm.items()):
             ts = v.get("ts", 0)
@@ -521,13 +661,16 @@ def expire_pending() -> None:
                 if now - ts > PENDING_CONFIRM_TTL:
                     v["resolved"] = "deny"
                     v["resolved_at"] = now
+                    v["timed_out"] = True
+                    expired.append({**v, "tool_id": k})
             elif now - v.get("resolved_at", ts) > PENDING_REAP_GRACE:
                 pending_confirm.pop(k, None)
+    return expired
 
 
-def register_pending(tool_id: str, command: str, session_id: str, provider: str, model: str) -> dict:
+def register_pending(tool_id: str, command: str, session_id: str, provider: str, model: str, info: dict = None) -> dict:
     """Park a tool call until the user decides; returns the client payload."""
-    expire_pending()
+    info = info or evaluate(command)
     with pending_lock:
         pending_confirm[tool_id] = {
             "ts": time.time(), "resolved": None, "command": command,
@@ -537,8 +680,9 @@ def register_pending(tool_id: str, command: str, session_id: str, provider: str,
         "pending": True,
         "tool_call_id": tool_id,
         "command": command,
-        "dangerous": is_dangerous(command),
-        "persistable": can_persist(command),
+        "dangerous": info["dangerous"],
+        "persistable": info["persistable"],
+        "patterns": info["patterns"],
         "session_id": session_id,
         "provider": provider,
         "model": model,

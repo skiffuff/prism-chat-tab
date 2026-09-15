@@ -168,10 +168,29 @@ async def validate_settings(request: Request):
 
 @router.get("/permissions")
 async def get_permissions(request: Request):
-    """Commands the user has chosen to allow without asking."""
+    """Stored rules: what runs without asking and what is always refused."""
     if not authed(request):
         return unauthorized()
-    return reply({"patterns": security.allowed_patterns()})
+    rules = security.load_rules()
+    return reply({"rules": rules, "patterns": [r["pattern"] for r in rules if r["action"] == "allow"]})
+
+
+@router.post("/permissions")
+async def add_permission(request: Request):
+    """Add or update a rule: {"pattern": "ls *", "action": "allow"|"deny"}."""
+    if not authed(request):
+        return unauthorized()
+    data = await json_body(request)
+    if data is None:
+        return bad_request("Invalid JSON body")
+    pattern = data.get("pattern")
+    action = data.get("action")
+    if not isinstance(pattern, str) or not isinstance(action, str):
+        return bad_request("pattern and action must be strings")
+    err = security.add_rule(pattern, action)
+    if err:
+        return bad_request(err)
+    return reply({"ok": True, "rules": security.load_rules()})
 
 
 @router.delete("/permissions")
@@ -184,6 +203,6 @@ async def delete_permission(request: Request):
     pattern = data.get("pattern")
     if not isinstance(pattern, str) or not pattern.strip():
         return bad_request("pattern must be a non-empty string")
-    if not security.revoke_pattern(pattern.strip()):
+    if not security.remove_rule(pattern.strip()):
         return reply({"error": "pattern not found"}, 404)
-    return reply({"ok": True, "patterns": security.allowed_patterns()})
+    return reply({"ok": True, "rules": security.load_rules()})

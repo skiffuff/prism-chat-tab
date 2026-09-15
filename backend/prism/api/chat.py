@@ -7,7 +7,7 @@ from fastapi import APIRouter, Request
 from .. import providers
 from ..providers.canonical import first_tool_call, result_part, text_of
 from ..screen import clean_response_text, start_recording, user_env, wants_screen
-from ..security import (command_ok_by_pattern, grant_pattern, pending_confirm, pending_lock,
+from ..security import (evaluate, grant_pattern, pending_confirm, pending_lock,
                         rate_limited, redact, register_pending, run_bash, expire_pending)
 from ..sessions import (MAX_TURNS, active_session, find_session, now_ts, record_quota_error,
                         record_round, save_sessions, set_session_title)
@@ -50,16 +50,41 @@ def model_loop(provider: str, model: str, sess: dict) -> dict:
         args, tool_id, name = first_tool_call(parts)
         if name == "run_bash" and args is not None:
             cmd = str(args.get("command", ""))
-            if command_ok_by_pattern(cmd):
-                print(f"🔧 [EXEC]: {redact(cmd)}")
+            verdict = evaluate(cmd)
+            if verdict["action"] == "deny":
+                # Could never run (or the user has a deny-rule): tell the
+                # model why instead of asking the user about it.
+                print(f"⛔ [REFUSED]: {redact(cmd)} — {verdict['reason']}")
+                result = f"Command refused: {verdict['reason']}"
+            elif verdict["action"] == "allow":
+                print(f"🔧 [EXEC] ({verdict['rule']}): {redact(cmd)}")
                 result = run_bash(cmd, user_env())
-                hist.append({"role": "user", "parts": [result_part(provider, tool_id, result)]})
-                save_sessions()
-                continue
-            payload = register_pending(tool_id, cmd, sess["id"], provider, model)
-            print(f"⏳ [PENDING]: {redact(cmd)}")
-            return {"pending": payload}
+            else:
+                payload = register_pending(tool_id, cmd, sess["id"], provider, model, verdict)
+                print(f"⏳ [PENDING]: {redact(cmd)}")
+                return {"pending": payload}
+            hist.append({"role": "user", "parts": [result_part(provider, tool_id, result)]})
+            save_sessions()
+            continue
         return {"response": clean_response_text(text_of(parts))}
+
+
+DENIED_RESULT = "Пользователь отклонил выполнение команды. Объясни это пользователю и не выполняй команду."
+TIMED_OUT_RESULT = "Пользователь не ответил на запрос подтверждения, команда не выполнена. Спроси, нужно ли повторить."
+
+
+def settle_expired() -> None:
+    """Record a denial for prompts nobody answered, so the conversation is
+    never left with a tool call that has no result."""
+    for pend in expire_pending():
+        sess = find_session(pend.get("session_id"))
+        if not sess:
+            continue
+        sess["messages"].append({"role": "user", "parts": [result_part(
+            pend.get("provider") or rt.provider, pend["tool_id"], TIMED_OUT_RESULT)]})
+        sess["updated"] = now_ts()
+        print(f"⌛ [TIMEOUT] confirmation for: {redact(pend.get('command', ''))}")
+    save_sessions()
     return {"error": {"message": "Request processing iteration count exceeded."}}
 
 
@@ -67,6 +92,7 @@ def model_loop(provider: str, model: str, sess: dict) -> dict:
 async def chat(request: Request):
     if not authed(request):
         return unauthorized()
+    settle_expired()
     if rate_limited(request):
         return reply({"error": "rate_limited", "message": "Too many requests. Try again in a minute."}, 429)
     data = await json_body(request)
@@ -133,7 +159,8 @@ async def chat(request: Request):
 async def tool_confirm(request: Request):
     """Resolve a pending run_bash confirmation.
 
-    Body: {"tool_call_id": "...", "decision": "allow"|"deny"|"never"}
+    Body: {"tool_call_id": "...", "decision": "allow"|"deny"|"never",
+           "pattern": "..."}   # optional, for "never": which offered pattern to store
     """
     if not authed(request):
         return unauthorized()
@@ -146,13 +173,18 @@ async def tool_confirm(request: Request):
         return bad_request('decision must be one of "allow", "deny", "never"')
     if not tool_call_id or not isinstance(tool_call_id, str):
         return bad_request("tool_call_id is required")
+    pattern = data.get("pattern")
+    if pattern is not None and not isinstance(pattern, str):
+        return bad_request("pattern must be a string")
 
-    expire_pending()
+    settle_expired()
     with pending_lock:
         pend = pending_confirm.get(tool_call_id)
         if not pend:
             return reply({"error": "No pending confirmation for this tool call, or it already expired."}, 404)
         if pend.get("resolved") is not None:
+            if pend.get("timed_out"):
+                return reply({"error": "This confirmation expired unanswered; the command was not run."}, 410)
             return reply({"error": "This confirmation was already resolved."}, 409)
         pend["resolved"] = decision
         pend["resolved_at"] = now_ts()
@@ -165,14 +197,13 @@ async def tool_confirm(request: Request):
 
     if decision == "deny":
         print(f"⛔ [DENIED] by user: {redact(cmd)}")
-        hist.append({"role": "user", "parts": [result_part(
-            provider, tool_call_id,
-            "Пользователь отклонил выполнение команды. Объясни это пользователю и не выполняй команду.")]})
+        hist.append({"role": "user", "parts": [result_part(provider, tool_call_id, DENIED_RESULT)]})
     else:
         if decision == "never":
-            # Refused for dangerous or network commands; the command still
-            # runs this once.
-            grant_pattern(cmd)
+            # Stores the chosen (or the most general) offered pattern. Refused
+            # for dangerous or network commands; the command still runs once.
+            if grant_pattern(cmd, pattern):
+                print(f"📌 [RULE] allow {redact(pattern or '')} for: {redact(cmd)}")
         print(f"🔧 [EXEC]: {redact(cmd)}")
         hist.append({"role": "user", "parts": [result_part(provider, tool_call_id, run_bash(cmd, user_env()))]})
     sess["updated"] = now_ts()

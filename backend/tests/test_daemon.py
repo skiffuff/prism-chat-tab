@@ -47,6 +47,7 @@ assert rt.provider == "openai" and rt.api_key() == "sk-good"
 # ── Fake OpenAI upstream ────────────────────────────────────────────────
 class FakeOpenAI(BaseHTTPRequestHandler):
     mode = "text"
+    next_mode = None   # switch to this mode after serving one response
     seen = []
 
     def log_message(self, *a):
@@ -74,12 +75,14 @@ class FakeOpenAI(BaseHTTPRequestHandler):
         if self.headers.get("Authorization") != "Bearer sk-good":
             return self._send(401, {"error": {"message": "Incorrect API key provided", "type": "invalid_request_error"}})
         mode = FakeOpenAI.mode
+        if FakeOpenAI.next_mode:
+            FakeOpenAI.mode, FakeOpenAI.next_mode = FakeOpenAI.next_mode, None
         if mode == "text":
             self._send(200, {"choices": [{"message": {"role": "assistant", "content": "Четыре"}}],
                              "usage": {"prompt_tokens": 11, "completion_tokens": 2}})
-        elif mode in ("tool", "tool-dig", "tool-ssh", "tool-zero"):
+        elif mode in ("tool", "tool-dig", "tool-ssh", "tool-zero", "tool-cat"):
             cmd = {"tool": "date", "tool-dig": "dig example.com", "tool-ssh": "base64 ~/.ssh/id_ed25519",
-                   "tool-zero": "od -v /dev/zero"}[mode]
+                   "tool-zero": "od -v /dev/zero", "tool-cat": "cat /etc/passwd"}[mode]
             self._send(200, {"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": [
                 {"id": "call_abc", "type": "function", "function": {"name": "run_bash", "arguments": json.dumps({"command": cmd})}},
                 {"id": "call_def", "type": "function", "function": {"name": "run_bash", "arguments": "{\"command\": \"ls\"}"}}]}}],
@@ -118,6 +121,29 @@ def test_persistability_excludes_network_and_dangerous():
     assert security.grant_pattern("dig example.com") is False
     assert security.grant_pattern("tee x") is False
     assert "dig *" not in security.allowed_patterns()
+
+    # An unanswered prompt times out into a recorded denial, never a dangling tool call
+    sessions.new_session()
+    FakeOpenAI.mode = "tool"
+    j = client.post("/chat", headers=H, json={"message": "какая дата?"}).json()
+    assert j["pending"] and j["patterns"] == ["date *"]
+    saved_ttl, security.PENDING_CONFIRM_TTL = security.PENDING_CONFIRM_TTL, -1
+    try:
+        r = client.post("/tool/confirm", headers=H, json={"tool_call_id": j["tool_call_id"], "decision": "allow"})
+    finally:
+        security.PENDING_CONFIRM_TTL = saved_ttl
+    assert r.status_code == 410
+    last = sessions.active_session()["messages"][-1]
+    assert last["role"] == "user" and "не ответил" in json.dumps(last, ensure_ascii=False)
+    FakeOpenAI.mode = "text"
+
+    # A command outside the allowlist is refused without asking the user
+    sessions.new_session()
+    FakeOpenAI.mode, FakeOpenAI.next_mode = "tool-cat", "text"
+    j = client.post("/chat", headers=H, json={"message": "покажи passwd"}).json()
+    assert "response" in j, j
+    tool_msgs = [m for m in _last_request()["messages"] if m["role"] == "tool"]
+    assert tool_msgs and "not in the allowed list" in tool_msgs[-1]["content"]
 
 
 def test_grant_and_match_patterns():
@@ -293,14 +319,47 @@ def test_settings_validation():
 
 def test_permissions_endpoints():
     assert security.grant_pattern("uname -a")
-    listed = client.get("/permissions", headers=H).json()["patterns"]
-    assert "uname *" in listed
+    j = client.get("/permissions", headers=H).json()
+    assert "uname *" in j["patterns"]
+    assert [r["action"] for r in j["rules"] if r["pattern"] == "uname *"] == ["allow"]
     assert client.request("DELETE", "/permissions", headers=H, json={"pattern": "uname *"}).status_code == 200
     assert "uname *" not in security.allowed_patterns()
     assert client.request("DELETE", "/permissions", headers=H, json={"pattern": "uname *"}).status_code == 404
     assert client.request("DELETE", "/permissions", headers=H, json={"pattern": ""}).status_code == 400
     assert client.request("DELETE", "/permissions", headers=H, content=b"{").status_code == 400
     assert client.get("/permissions").status_code == 401
+    # hand-written rules: deny anything, allow only allowlisted non-network binaries
+    assert client.post("/permissions", headers=H, json={"pattern": "ping *", "action": "deny"}).status_code == 200
+    assert client.post("/permissions", headers=H, json={"pattern": "ping *", "action": "allow"}).status_code == 400
+    assert client.post("/permissions", headers=H, json={"pattern": "rm *", "action": "allow"}).status_code == 400
+    assert client.post("/permissions", headers=H, json={"pattern": "*", "action": "allow"}).status_code == 400
+    assert client.post("/permissions", headers=H, json={"pattern": "wc *", "action": "allow"}).status_code == 200
+    assert client.post("/permissions", headers=H, json={"pattern": "wc *", "action": "sometimes"}).status_code == 400
+    rules = {r["pattern"]: r["action"] for r in client.get("/permissions", headers=H).json()["rules"]}
+    assert rules["ping *"] == "deny" and rules["wc *"] == "allow"
+    security.save_rules([])
+
+
+def test_evaluate_and_candidates():
+    assert security.pattern_candidates("ls -la /tmp") == ["ls *", "ls -la /tmp"]
+    assert security.pattern_candidates("date") == ["date *"]
+    assert security.pattern_candidates("ls; rm x") == ["ls; rm x"]
+    assert security.evaluate("cat /etc/passwd")["action"] == "deny"
+    assert security.evaluate("ls ~/.ssh")["action"] == "deny"
+    assert security.evaluate("ls -la")["action"] == "ask"
+    assert security.evaluate("dig example.com")["patterns"] == []
+    security.add_rule("date *", "allow")
+    security.add_rule("ls /tmp*", "deny")
+    assert security.evaluate("date")["action"] == "allow"
+    assert security.evaluate("ls /tmp/x") == security.evaluate("ls /tmp/x")
+    assert security.evaluate("ls /tmp/x")["action"] == "deny" and security.evaluate("ls /tmp/x")["rule"] == "ls /tmp*"
+    assert security.evaluate("ls /home")["action"] == "ask"
+    # the exact-command candidate can be stored instead of the wildcard
+    assert security.grant_pattern("wc -l README.md", "wc -l README.md")
+    assert security.grant_pattern("wc -l README.md", "wc -l *") is False
+    assert security.evaluate("wc -l README.md")["action"] == "allow"
+    assert security.evaluate("wc -l other.md")["action"] == "ask"
+    security.save_rules([])
 
 
 def test_sessions_endpoints():
@@ -357,13 +416,11 @@ def test_chat_tool_flow_and_persistability():
     assert r.status_code == 200
     assert "dig *" not in security.allowed_patterns()
 
-    # Credential path in a tool argument is refused at execution
+    # Credential path in a tool argument is refused before anyone is asked
     sessions.new_session()
-    FakeOpenAI.mode = "tool-ssh"
+    FakeOpenAI.mode, FakeOpenAI.next_mode = "tool-ssh", "text"
     j = client.post("/chat", headers=H, json={"message": "покажи ключ"}).json()
-    assert j["pending"]
-    FakeOpenAI.mode = "text"
-    client.post("/tool/confirm", headers=H, json={"tool_call_id": j["tool_call_id"], "decision": "allow"})
+    assert "response" in j, j
     tool_msg = _last_request()["messages"][-1]
     assert tool_msg["role"] == "tool" and "blocked" in tool_msg["content"] and "PRIVATE" not in tool_msg["content"]
 

@@ -11,7 +11,7 @@ FastAPI daemon, package `backend/prism/` (config, security, sessions, screen, pr
 
 1. **Security is paramount.** Keep the CORS hardening middleware as-is (reject OPTIONS, no CORS headers). Never log API keys or config secrets — keys live in keyring (`_keyring_*`), never in config or logs.
 2. Every mutating endpoint must go through `DaemonToken()` auth (`_authorize`) and the rate limiter (`_rate_limited`). New endpoints MUST call both.
-3. **run_bash permission flow**: execution only via `run_bash_execution(command)`. Gate commands through `_command_ok_by_pattern` → if admin is required, `_grant_pattern`, and unresolved requests wait for client confirmation via `/tool/confirm`. Never bypass `_is_dangerous`/pattern checks. Allowed-path checks (`_allowed_read_path`) apply to file access.
+3. **run_bash permission flow**: every call goes through `security.evaluate(command)` → `deny` (refused, model told why, no prompt), `allow` (a stored allow-rule, runs inline) or `ask` (`register_pending` → `/tool/confirm`). Rules live in `permissions.json` as `{pattern, action: allow|deny}` and are managed by `add_rule` / `remove_rule` / `grant_pattern(command, pattern)`; `pattern_candidates` decides what a prompt may store. Never bypass `is_dangerous` / `can_persist`; execution only via `run_bash`. Unanswered prompts are settled by `chat.settle_expired()`.
 4. Successfully executed commands are printed as `[EXEC]: <cmd>` — keep that marker in all execution paths.
 5. Endpoints return JSONResponse with explicit status codes. Use `@app.get/@app.post` only, no body parsing bypass.
 6. Config: `PRISM_CONFIG` env or `~/.config/prism/config.json`. Sessions persisted via `_load_sessions`/`_save_sessions`. Reuse these helpers; do not invent a parallel store.

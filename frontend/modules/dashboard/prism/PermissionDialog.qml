@@ -9,8 +9,9 @@ import qs.services
 // footer of Allow once / Allow always / Reject. It sits directly on top of
 // the composer, sharing its fill and radius, so the two read as one block,
 // and the highlight takes the active provider's colour (red for commands
-// on the dangerous list). Keyboard: ←/→ or Tab to move, Enter to confirm,
-// Esc to reject.
+// on the dangerous list). The "Patterns" list shows what "Allow always"
+// would store; ↑/↓ picks between the wildcard and the exact command.
+// Keyboard: ←/→ or Tab to move, Enter to confirm, Esc to reject.
 Rectangle {
     id: root
 
@@ -50,6 +51,14 @@ Rectangle {
             root.tab.confirmTool(a.decision);
     }
 
+    readonly property bool hasPatterns: root.tab.confirmPersistable && root.tab.confirmPatterns.length > 0
+
+    function movePattern(step: int): void {
+        const n = root.tab.confirmPatterns.length;
+        if (n > 1)
+            root.tab.confirmPatternIndex = (root.tab.confirmPatternIndex + step + n) % n;
+    }
+
     implicitHeight: body.anchors.topMargin + body.implicitHeight + footer.implicitHeight
     radius: Math.min(root.tab.composerRadius, 20)
     bottomLeftRadius: 0
@@ -84,6 +93,12 @@ Rectangle {
         case Qt.Key_Right:
         case Qt.Key_Tab:
             root.move(1);
+            break;
+        case Qt.Key_Up:
+            root.movePattern(-1);
+            break;
+        case Qt.Key_Down:
+            root.movePattern(1);
             break;
         case Qt.Key_Return:
         case Qt.Key_Enter:
@@ -182,6 +197,71 @@ Rectangle {
             }
         }
 
+        // Patterns: what "Allow always" will store; the highlighted one wins
+        Text {
+            visible: root.hasPatterns
+            Layout.topMargin: 10
+            text: qsTr("Patterns")
+            font: Tokens.font.mono.medium
+            color: root.dim
+        }
+
+        Repeater {
+            model: root.hasPatterns ? root.tab.confirmPatterns : []
+
+            delegate: Rectangle {
+                id: patRow
+
+                required property int index
+                required property string modelData
+
+                readonly property bool current: root.tab.confirmPatternIndex === index
+
+                Layout.fillWidth: true
+                Layout.topMargin: index === 0 ? 6 : 0
+                implicitHeight: 24
+                radius: 4
+                color: current ? Qt.alpha(root.accent, 0.14) : (patArea.containsMouse ? Qt.alpha(root.fg, 0.05) : "transparent")
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: 6
+                    anchors.rightMargin: 8
+                    spacing: 8
+
+                    Text {
+                        text: patRow.current ? "●" : "-"
+                        font: Tokens.font.mono.medium
+                        color: patRow.current ? root.accent : root.dim
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: patRow.modelData
+                        font: Tokens.font.mono.medium
+                        color: patRow.current ? root.fg : root.dim
+                        elide: Text.ElideMiddle
+                    }
+
+                    Text {
+                        visible: patRow.current
+                        text: patRow.modelData.endsWith(" *") ? qsTr("any %1 command").arg(patRow.modelData.slice(0, -2)) : qsTr("this exact command")
+                        font: Tokens.font.mono.small
+                        color: root.dim
+                    }
+                }
+
+                MouseArea {
+                    id: patArea
+
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.tab.confirmPatternIndex = patRow.index
+                }
+            }
+        }
+
         RowLayout {
             visible: root.tab.confirmDangerous || !root.tab.confirmPersistable
             Layout.topMargin: 6
@@ -275,6 +355,14 @@ Rectangle {
                 // Key hints; dropped when the panel is too narrow for them
                 visible: root.width >= 640
                 spacing: 14
+
+                Hint {
+                    visible: root.hasPatterns && root.tab.confirmPatterns.length > 1
+                    key: "⇅"
+                    label: qsTr("pattern")
+                    keyColour: Qt.alpha(root.fg, 0.8)
+                    labelColour: root.dim
+                }
 
                 Hint {
                     key: "⇄"

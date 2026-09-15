@@ -103,6 +103,14 @@ Item {
         GeminiChat.saveSettings(payload);
     }
 
+    function addRule(action: string): void {
+        const pat = ruleInput.text.trim();
+        if (!pat)
+            return;
+        GeminiChat.setPermission(pat, action);
+        ruleInput.text = "";
+    }
+
     function setSwatch(index: int, colour: string): void {
         const g = root.gradient.slice();
         g[index] = colour;
@@ -740,14 +748,90 @@ Item {
                 Page {
                     PageTitle {
                         title: qsTr("Permissions")
-                        subtitle: qsTr("Commands you answered “Allow always” to run without asking. Dangerous and network commands can never be added here.")
+                        subtitle: qsTr("Rules for the run_bash tool. Allow rules run a matching command without asking; deny rules refuse it without asking. Everything else prompts you. Only read-only commands can be allowed, and dangerous or network commands never.")
                     }
+
+                    // Add a rule by hand
+                    FieldLabel {
+                        text: qsTr("New rule")
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Tokens.spacing.small
+
+                        Field {
+                            Layout.fillWidth: true
+                            focused: ruleInput.activeFocus
+
+                            TextInput {
+                                id: ruleInput
+
+                                anchors.fill: parent
+                                anchors.leftMargin: Tokens.padding.medium
+                                anchors.rightMargin: Tokens.padding.medium
+                                verticalAlignment: TextInput.AlignVCenter
+                                color: Colours.palette.m3onSurface
+                                font: Tokens.font.mono.medium
+                                clip: true
+                                selectByMouse: true
+                                onAccepted: {
+                                    if (text.trim().length > 0)
+                                        root.addRule("allow");
+                                }
+
+                                StyledText {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    visible: !ruleInput.text && !ruleInput.activeFocus
+                                    text: qsTr("pattern, e.g.  ls *   or   ping *")
+                                    font: Tokens.font.mono.medium
+                                    color: Colours.palette.m3outline
+                                }
+                            }
+                        }
+
+                        SmallButton {
+                            label: qsTr("Allow")
+                            enabled: ruleInput.text.trim().length > 0
+                            onClicked: root.addRule("allow")
+                        }
+
+                        SmallButton {
+                            label: qsTr("Deny")
+                            danger: true
+                            enabled: ruleInput.text.trim().length > 0
+                            onClicked: root.addRule("deny")
+                        }
+                    }
+
+                    StyledText {
+                        id: ruleError
+
+                        Layout.fillWidth: true
+                        visible: text.length > 0
+                        font: Tokens.font.body.small
+                        color: root.bad
+                        wrapMode: Text.Wrap
+
+                        Connections {
+                            target: GeminiChat
+
+                            function onPermissionError(error) {
+                                ruleError.text = error;
+                            }
+
+                            function onPermissionsChanged() {
+                                ruleError.text = "";
+                            }
+                        }
+                    }
+
+                    Divider {}
 
                     StyledText {
                         Layout.fillWidth: true
                         visible: GeminiChat.permissions.length === 0
-                        Layout.topMargin: Tokens.spacing.medium
-                        text: qsTr("Nothing is allowed automatically yet.")
+                        text: qsTr("No rules yet. Answer “Allow always” in a prompt, or add one above.")
                         font: Tokens.font.body.medium
                         color: Colours.palette.m3onSurfaceVariant
                     }
@@ -758,10 +842,12 @@ Item {
                         delegate: Rectangle {
                             id: permRow
 
-                            required property string modelData
+                            required property var modelData
+
+                            readonly property bool allow: modelData.action !== "deny"
 
                             Layout.fillWidth: true
-                            implicitHeight: 40
+                            implicitHeight: 42
                             radius: Tokens.rounding.medium
                             color: Colours.tPalette.m3surfaceContainerHigh
 
@@ -771,27 +857,62 @@ Item {
                                 anchors.rightMargin: Tokens.padding.small
                                 spacing: Tokens.spacing.small
 
-                                MaterialIcon {
-                                    text: "terminal"
-                                    fontStyle: Tokens.font.icon.small
-                                    color: root.accent
+                                // Action badge; click flips allow <-> deny
+                                Rectangle {
+                                    implicitWidth: badgeLabel.implicitWidth + 16
+                                    implicitHeight: 24
+                                    radius: 12
+                                    color: permRow.allow ? Qt.alpha(root.accent, 0.16) : Qt.alpha(root.bad, 0.16)
+
+                                    StyledText {
+                                        id: badgeLabel
+
+                                        anchors.centerIn: parent
+                                        text: permRow.allow ? qsTr("allow") : qsTr("deny")
+                                        font: Tokens.font.mono.small
+                                        color: permRow.allow ? root.accent : root.bad
+                                    }
+
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: GeminiChat.setPermission(permRow.modelData.pattern, permRow.allow ? "deny" : "allow")
+                                    }
                                 }
 
                                 StyledText {
                                     Layout.fillWidth: true
-                                    text: permRow.modelData
+                                    text: permRow.modelData.pattern
                                     font: Tokens.font.mono.medium
                                     color: Colours.palette.m3onSurface
                                     elide: Text.ElideMiddle
                                 }
 
+                                StyledText {
+                                    visible: permRow.modelData.added > 0
+                                    text: new Date(permRow.modelData.added * 1000).toLocaleDateString(Qt.locale(), Locale.ShortFormat)
+                                    font: Tokens.font.label.small
+                                    color: Colours.palette.m3onSurfaceVariant
+                                    opacity: 0.7
+                                }
+
                                 IconChip {
                                     icon: "close"
-                                    tip: qsTr("Revoke")
-                                    onClicked: GeminiChat.revokePermission(permRow.modelData)
+                                    tip: qsTr("Remove rule")
+                                    onClicked: GeminiChat.revokePermission(permRow.modelData.pattern)
                                 }
                             }
                         }
+                    }
+
+                    StyledText {
+                        Layout.fillWidth: true
+                        Layout.topMargin: Tokens.spacing.small
+                        text: qsTr("Patterns match the whole command, shell-glob style: “ls *” covers every ls invocation, “wc -l README.md” only that command. Click a badge to flip a rule between allow and deny.")
+                        font: Tokens.font.body.small
+                        color: Colours.palette.m3onSurfaceVariant
+                        wrapMode: Text.Wrap
+                        opacity: 0.8
                     }
                 }
             }
