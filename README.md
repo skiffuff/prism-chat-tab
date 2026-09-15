@@ -140,6 +140,8 @@ API keys stored only in OS keyring (never written to disk).
 
 **Daemon won't start:** Check `~/.local/share/prism/venv/bin/python` exists, install deps: `pip install fastapi uvicorn requests secretstorage`
 
+**Run a second daemon (staging/tests):** start it with `PRISM_PORT=5055` and give the shell `PRISM_DAEMON_URL=http://127.0.0.1:5055` (plus `PRISM_CONFIG` / `PRISM_TOKEN_FILE` for a separate state).
+
 **No API key:** Set `GEMINI_API_KEY`, `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, or add via daemon settings API
 
 **OpenAI behind a proxy:** set `"openai_url": "https://your-proxy"` in `~/.config/prism/config.json` (the API only accepts `api.openai.com`, the configured value is kept as-is)

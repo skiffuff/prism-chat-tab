@@ -7,7 +7,8 @@ import Quickshell.Io
 Singleton {
     id: root
 
-    readonly property string daemonUrl: "http://127.0.0.1:5000"
+    // PRISM_DAEMON_URL points the tab at a daemon on another port (PRISM_PORT)
+    readonly property string daemonUrl: Quickshell.env("PRISM_DAEMON_URL") || "http://127.0.0.1:5000"
     readonly property string tokenPath: Quickshell.env("HOME") + "/.local/share/prism/daemon.token"
 
     property string authToken: ""

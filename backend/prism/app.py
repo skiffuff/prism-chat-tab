@@ -1,5 +1,7 @@
 """FastAPI application assembly and the daemon entry point."""
 
+import os
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -10,7 +12,9 @@ from .keyring_store import keyring_get, keyring_set
 from .security import ensure_token_file
 
 HOST = "127.0.0.1"
-PORT = 5000
+# PRISM_PORT lets a second instance run next to the installed one (tests,
+# staging); the tab follows it through PRISM_DAEMON_URL.
+PORT = int(os.environ.get("PRISM_PORT", "5000"))
 
 
 def create_app() -> FastAPI:
