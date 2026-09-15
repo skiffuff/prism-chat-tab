@@ -79,6 +79,9 @@ Item {
     }
 
     function save(): void {
+        // A gradient equal to the provider's own palette is sent as empty so
+        // the glow keeps following the provider instead of being pinned.
+        const isDefault = root.gradient.join(",") === (root.sd?.glow_default_gradient ?? []).join(",");
         const payload = {
             system_instruction: sysInput.text,
             glow: {
@@ -86,7 +89,7 @@ Item {
                 ring_count: Math.round(ringsSlider.value),
                 sigma: Math.round(sigmaSlider.value),
                 alpha: Math.round(alphaSlider.value * 100) / 100,
-                gradient: root.gradient
+                gradient: isDefault ? [] : root.gradient
             }
         };
         // The endpoint field means a different setting per provider; Gemini's

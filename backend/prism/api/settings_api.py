@@ -42,6 +42,7 @@ async def get_settings(request: Request):
         "system_instruction_default": DEFAULT_SYSTEM_INSTRUCTION,
         "glow": _glow_settings(),
         "glow_default_gradient": rt.provider_def()["gradient"],
+        "glow_gradient_custom": bool((rt.config.get("glow") or {}).get("gradient")),
     })
 
 
@@ -72,12 +73,16 @@ def _validate_glow(glow: dict):
             if isinstance(v, bool) or not isinstance(v, (int, float)) or not (lo <= v <= hi):
                 return None, f"glow.{key} must be a number between {lo} and {hi}"
             clean[key] = int(v) if key != "alpha" else float(v)
-    if glow.get("gradient"):
+    if "gradient" in glow:
         grad = glow["gradient"]
-        if not isinstance(grad, list) or not (2 <= len(grad) <= 8) or not all(
+        if not grad:
+            # Empty / null: forget the stored gradient and follow the provider
+            clean["gradient"] = None
+        elif not isinstance(grad, list) or not (2 <= len(grad) <= 8) or not all(
                 isinstance(c, str) and _HEX_COLOUR.match(c) for c in grad):
             return None, "glow.gradient must be 2-8 #rrggbb colours"
-        clean["gradient"] = [c.lower() for c in grad]
+        else:
+            clean["gradient"] = [c.lower() for c in grad]
     return clean, None
 
 
@@ -147,7 +152,10 @@ async def update_settings(request: Request):
     if glow_clean is not None:
         current = {**GLOW_DEFAULTS, **(rt.config.get("glow") or {})}
         current.update(glow_clean)
-        current["gradient"] = current.get("gradient") or rt.provider_def()["gradient"]
+        # Only a gradient the user actually chose is stored; without one the
+        # glow keeps following the active provider's palette.
+        if not current.get("gradient"):
+            current.pop("gradient", None)
         rt.config["glow"] = current
     save_config()
     return reply({"ok": True})
