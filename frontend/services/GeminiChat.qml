@@ -549,13 +549,52 @@ Singleton {
         if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
         xhr.setRequestHeader("Content-Type", "application/json");
         xhr.onreadystatechange = () => {
-            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
+            if (xhr.readyState !== XMLHttpRequest.DONE)
+                return;
+            if (xhr.status === 200) {
                 loadSettings();
+                settingsSaved(true, "");
+                return;
             }
+            let err = xhr.status === 0 ? qsTr("Daemon unreachable") : qsTr("Save failed (%1)").arg(xhr.status);
+            try {
+                err = JSON.parse(xhr.responseText).error || err;
+            } catch (e) {}
+            settingsSaved(false, err);
         };
         xhr.send(JSON.stringify(data));
     }
 
+    // "Allow always" patterns stored by the daemon (~/.config/prism/permissions.json)
+    property var permissions: []
+
+    function loadPermissions() {
+        const xhr = _xhr();
+        xhr.open("GET", `${daemonUrl}/permissions`);
+        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
+                try {
+                    permissions = JSON.parse(xhr.responseText).patterns || [];
+                } catch (e) {}
+            }
+        };
+        xhr.send();
+    }
+
+    function revokePermission(pattern) {
+        const xhr = _xhr();
+        xhr.open("DELETE", `${daemonUrl}/permissions`);
+        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
+        xhr.setRequestHeader("Content-Type", "application/json");
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState === XMLHttpRequest.DONE)
+                loadPermissions();
+        };
+        xhr.send(JSON.stringify({ pattern: pattern }));
+    }
+
+    signal settingsSaved(bool ok, string error)
     signal settingsValidated(var result)
     signal chatReset()
     signal toolConfirmRequested(var info)

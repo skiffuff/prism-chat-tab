@@ -32,6 +32,8 @@ StyledRect {
 
     implicitHeight: (attachments.visible ? 62 : 0) + 96
     radius: 20
+    topLeftRadius: root.tab.confirmOpen ? 0 : radius
+    topRightRadius: root.tab.confirmOpen ? 0 : radius
     color: Colours.light
         ? root.tab.mixColour(Colours.palette.m3surface, "#F7EFE5", 0.85)
         : root.tab.mixColour(Colours.palette.m3surface, "#3A3128", 0.55)

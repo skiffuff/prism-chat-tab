@@ -55,10 +55,12 @@ frontend/                overlay onto the Caelestia shell root
   greeting with starter prompts and neutral pill, Claude's serif greeting,
   boxed composer and chips
 - History drawer with rename / delete, provider, model and quota dropdowns
-- run_bash confirmation in the style of opencode's permission prompt
+- run_bash confirmation in the style of opencode's permission prompt,
+  docked onto the composer in the provider's colours
   (Allow once / Allow always / Reject, keyboard driven)
-- Settings: API key (OS keyring only), provider endpoint, system instruction,
-  glow overlay
+- Settings with a section list: Connection (key in the OS keyring, test /
+  remove, provider endpoint), Behaviour (system instruction), Appearance
+  (glow overlay), Permissions (revoke "Allow always" patterns)
 
 **Daemon (backend/prism_daemon.py)**
 - Multi-provider: Google Gemini, Claude and ChatGPT (OpenAI Chat Completions)
@@ -113,8 +115,9 @@ frontend/                overlay onto the Caelestia shell root
 | `/clipboard_image` | POST | Get clipboard image |
 | `/read_file` | POST | Read a file |
 | `/pick_file` | POST | Open file picker |
-| `/settings` | GET | Get settings |
+| `/settings` | GET / PUT | Get / update settings |
 | `/settings/validate` | POST | Validate API key |
+| `/permissions` | GET / DELETE | List / revoke "Allow always" patterns |
 
 ## Security
 

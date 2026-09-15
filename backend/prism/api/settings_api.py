@@ -7,8 +7,8 @@ from urllib.parse import urlparse
 
 from fastapi import APIRouter, Request
 
-from .. import providers
-from ..config import GLOW_DEFAULTS, provider_env, rt, save_config
+from .. import providers, security
+from ..config import DEFAULT_SYSTEM_INSTRUCTION, GLOW_DEFAULTS, provider_env, rt, save_config
 from ..keyring_store import keyring_delete, keyring_set
 from .common import authed, bad_request, json_body, reply, unauthorized
 
@@ -37,7 +37,9 @@ async def get_settings(request: Request):
         "anthropic_url": rt.anthropic_url,
         "openai_url": rt.openai_url,
         "system_instruction": rt.system_instruction,
+        "system_instruction_default": DEFAULT_SYSTEM_INSTRUCTION,
         "glow": _glow_settings(),
+        "glow_default_gradient": rt.provider_def()["gradient"],
     })
 
 
@@ -162,3 +164,26 @@ async def validate_settings(request: Request):
         return reply(providers.backend().validate_key(key))
     except Exception:
         return reply({"valid": False, "error": "Validation failed (network error). See daemon logs."})
+
+
+@router.get("/permissions")
+async def get_permissions(request: Request):
+    """Commands the user has chosen to allow without asking."""
+    if not authed(request):
+        return unauthorized()
+    return reply({"patterns": security.allowed_patterns()})
+
+
+@router.delete("/permissions")
+async def delete_permission(request: Request):
+    if not authed(request):
+        return unauthorized()
+    data = await json_body(request)
+    if data is None:
+        return bad_request("Invalid JSON body")
+    pattern = data.get("pattern")
+    if not isinstance(pattern, str) or not pattern.strip():
+        return bad_request("pattern must be a non-empty string")
+    if not security.revoke_pattern(pattern.strip()):
+        return reply({"error": "pattern not found"}, 404)
+    return reply({"ok": True, "patterns": security.allowed_patterns()})

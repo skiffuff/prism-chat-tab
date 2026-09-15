@@ -17,6 +17,8 @@ StyledRect {
 
     implicitHeight: attachments.visible ? 50 + 62 : 50
     radius: 25
+    topLeftRadius: root.tab.confirmOpen ? 0 : radius
+    topRightRadius: root.tab.confirmOpen ? 0 : radius
     color: root.tab.isChatGPT
         ? (Colours.light
             ? root.tab.mixColour(Colours.tPalette.m3surfaceContainerHigh, "#F4F4F4", 0.7)

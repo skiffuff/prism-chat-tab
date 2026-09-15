@@ -12,6 +12,8 @@ Item {
 
     implicitWidth: 840
     implicitHeight: 520
+    // The composer glow spills past the tab's edges
+    clip: true
 
     // Brand palette (follows the active AI provider)
     readonly property color gBlue: GeminiChat.providerPrimary
@@ -27,6 +29,9 @@ Item {
     // Claude's composer is a box with the send button in the corner; Gemini
     // and ChatGPT both use a pill.
     readonly property bool boxedInput: isClaude
+    // The permission panel docks onto the composer and borrows its look
+    readonly property color composerColour: boxedInput ? composerBox.color : composerPill.color
+    readonly property int composerRadius: boxedInput ? composerBox.radius : composerPill.radius
 
     property bool settingsMode: false
     property bool histOpen: false
@@ -102,6 +107,17 @@ Item {
         }
     }
 
+    // Soft brand glow around the composer (gemini.google.com). Sits behind
+    // the layout so it shows both above the prompt and below it.
+    ComposerGlow {
+        anchors.horizontalCenter: parent.horizontalCenter
+        y: composerStack.y + composerStack.height / 2 - height / 2
+        width: Math.min(parent.width, 760)
+        height: 460
+        colour: root.gBlue
+        visible: root.isGemini && !root.settingsMode && GeminiChat.messages.count === 0
+    }
+
     HistoryDrawer {
         tab: root
     }
@@ -141,17 +157,6 @@ Item {
             clip: true
             visible: !root.settingsMode
 
-            // Soft brand glow rising from behind the composer (gemini.google.com)
-            ComposerGlow {
-                anchors.horizontalCenter: parent.horizontalCenter
-                anchors.bottom: parent.bottom
-                anchors.bottomMargin: -140
-                width: Math.min(parent.width, 760)
-                height: 420
-                colour: root.gBlue
-                visible: root.isGemini && GeminiChat.messages.count === 0
-            }
-
             EmptyState {
                 tab: root
                 anchors.centerIn: parent
@@ -167,20 +172,35 @@ Item {
             }
         }
 
-        ComposerPill {
-            id: composerPill
+        // Permission panel + composer, joined with no gap
+        ColumnLayout {
+            id: composerStack
 
-            tab: root
             Layout.fillWidth: true
-            visible: !root.settingsMode && !root.boxedInput
-        }
+            spacing: 0
+            visible: !root.settingsMode
 
-        ComposerBox {
-            id: composerBox
+            PermissionDialog {
+                tab: root
+                Layout.fillWidth: true
+                visible: root.confirmOpen
+            }
 
-            tab: root
-            Layout.fillWidth: true
-            visible: !root.settingsMode && root.boxedInput
+            ComposerPill {
+                id: composerPill
+
+                tab: root
+                Layout.fillWidth: true
+                visible: !root.boxedInput
+            }
+
+            ComposerBox {
+                id: composerBox
+
+                tab: root
+                Layout.fillWidth: true
+                visible: root.boxedInput
+            }
         }
 
         // Disclaimer hint under the input
@@ -201,12 +221,5 @@ Item {
             Layout.fillHeight: true
             visible: root.settingsMode
         }
-    }
-
-    PermissionDialog {
-        tab: root
-        anchors.fill: parent
-        z: 200
-        visible: root.confirmOpen
     }
 }

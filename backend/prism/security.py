@@ -493,6 +493,15 @@ def grant_pattern(command: str) -> bool:
     return True
 
 
+def revoke_pattern(pattern: str) -> bool:
+    """Drop a stored allow-pattern; False when it was not there."""
+    patterns = allowed_patterns()
+    if pattern not in patterns:
+        return False
+    _save_allowed_patterns([p for p in patterns if p != pattern])
+    return True
+
+
 PENDING_CONFIRM_TTL = 120   # seconds before an unanswered prompt counts as denied
 PENDING_REAP_GRACE = 300    # seconds a resolved entry is kept so a late poll still reads it
 

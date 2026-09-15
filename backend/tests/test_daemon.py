@@ -291,6 +291,18 @@ def test_settings_validation():
     assert client.post("/settings/validate", headers=H, json={"api_key": 5}).json()["valid"] is False
 
 
+def test_permissions_endpoints():
+    assert security.grant_pattern("uname -a")
+    listed = client.get("/permissions", headers=H).json()["patterns"]
+    assert "uname *" in listed
+    assert client.request("DELETE", "/permissions", headers=H, json={"pattern": "uname *"}).status_code == 200
+    assert "uname *" not in security.allowed_patterns()
+    assert client.request("DELETE", "/permissions", headers=H, json={"pattern": "uname *"}).status_code == 404
+    assert client.request("DELETE", "/permissions", headers=H, json={"pattern": ""}).status_code == 400
+    assert client.request("DELETE", "/permissions", headers=H, content=b"{").status_code == 400
+    assert client.get("/permissions").status_code == 401
+
+
 def test_sessions_endpoints():
     assert client.post("/session/select", headers=H, json={"id": 123}).status_code == 400
     assert client.post("/session/select", headers=H, json={"id": "nope"}).status_code == 404
