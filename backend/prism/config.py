@@ -155,6 +155,8 @@ class Runtime:
     model: str = PROVIDERS[0]["default_model"]
     # provider id -> API key currently in use (keyring, config or env)
     keys: dict = field(default_factory=dict)
+    # where each key came from: "keyring" | "env" | "config" | ""
+    key_sources: dict = field(default_factory=dict)
     worker_url: str = os.environ.get("PRISM_WORKER_URL", "")
     anthropic_url: str = ANTHROPIC_DEFAULT_URL
     openai_url: str = OPENAI_DEFAULT_URL
@@ -207,13 +209,17 @@ def load_config(keyring_get, keyring_set) -> None:
     for p in PROVIDERS:
         pid = p["id"]
         key = keyring_get(pid)
+        source = "keyring" if key else ""
         if not key and pid == "gemini" and cfg.get("api_key"):
             key = str(cfg["api_key"])
-            if keyring_set("gemini", key):
+            source = "keyring" if keyring_set("gemini", key) else "config"
+            if source == "keyring":
                 cfg.pop("api_key", None)
         if not key:
             key = os.environ.get(p["env"], "")
+            source = "env" if key else ""
         rt.keys[pid] = key
+        rt.key_sources[pid] = source
 
     if cfg.get("worker_url"):
         rt.worker_url = str(cfg["worker_url"])

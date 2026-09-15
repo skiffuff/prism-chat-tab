@@ -293,6 +293,7 @@ def test_providers_and_models():
 def test_settings_validation():
     st = client.get("/settings", headers=H).json()
     assert st["openai_url"] == rt.openai_url
+    assert st["api_key_set"] is True and st["api_key_source"] == "env" and st["api_key_env"] == "OPENAI_API_KEY"
     r = client.put("/settings", headers=H, json={"worker_url": st["worker_url"], "openai_url": st["openai_url"], "system_instruction": "SYS2"})
     assert r.status_code == 200 and rt.system_instruction == "SYS2"
     assert client.put("/settings", headers=H, json={"worker_url": "https://evil.example"}).status_code == 400

@@ -32,6 +32,8 @@ async def get_settings(request: Request):
     return reply({
         "provider": rt.provider,
         "api_key_set": bool(rt.keys.get(rt.provider)),
+        "api_key_source": rt.key_sources.get(rt.provider, "keyring" if rt.keys.get(rt.provider) else ""),
+        "api_key_env": provider_env(rt.provider),
         "key_placeholder": rt.provider_def()["key_placeholder"],
         "worker_url": rt.worker_url,
         "anthropic_url": rt.anthropic_url,
@@ -128,10 +130,11 @@ async def update_settings(request: Request):
         new_key = text("api_key")
         if new_key:
             rt.keys[rt.provider] = new_key
-            keyring_set(rt.provider, new_key)
+            rt.key_sources[rt.provider] = "keyring" if keyring_set(rt.provider, new_key) else "memory"
         else:
             keyring_delete(rt.provider)
             rt.keys[rt.provider] = os.environ.get(provider_env(rt.provider), "")
+            rt.key_sources[rt.provider] = "env" if rt.keys[rt.provider] else ""
     if text("anthropic_url"):
         rt.anthropic_url = text("anthropic_url")
         rt.config["anthropic_url"] = rt.anthropic_url

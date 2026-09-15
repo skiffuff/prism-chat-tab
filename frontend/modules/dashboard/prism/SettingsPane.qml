@@ -349,9 +349,18 @@ Item {
                         }
 
                         StyledText {
-                            text: root.sd?.api_key_set
-                                ? qsTr("A key is stored in the system keyring")
-                                : qsTr("No key stored — %1 will not answer until one is set").arg(root.tab.providerLabel)
+                            text: {
+                                if (!root.sd?.api_key_set)
+                                    return qsTr("No key stored — %1 will not answer until one is set").arg(root.tab.providerLabel);
+                                switch (root.sd?.api_key_source) {
+                                case "env":
+                                    return qsTr("Key taken from the %1 environment variable").arg(root.sd?.api_key_env ?? "");
+                                case "memory":
+                                    return qsTr("Key set for this run only — the keyring is unavailable");
+                                default:
+                                    return qsTr("A key is stored in the system keyring");
+                                }
+                            }
                             font: Tokens.font.body.small
                             color: Colours.palette.m3onSurfaceVariant
                         }

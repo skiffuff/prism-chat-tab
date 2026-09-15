@@ -19,14 +19,17 @@ ColumnLayout {
     // login name. Set PRISM_USER_NAME in the shell's environment to override.
     readonly property string userName: {
         const u = Quickshell.env("PRISM_USER_NAME") || Quickshell.env("USER") || "";
-        return u ? u.charAt(0).toUpperCase() + u.slice(1) : qsTr("there");
+        return u ? u.charAt(0).toUpperCase() + u.slice(1) : "";
     }
 
     readonly property var greetings: {
         if (root.tab.isChatGPT)
             return [qsTr("Where should we begin?"), qsTr("What's on your mind today?"), qsTr("What can I help with?"), qsTr("Ready when you are.")];
-        if (root.tab.isClaude)
+        if (root.tab.isClaude) {
+            if (!userName)
+                return [qsTr("Hey there"), qsTr("Good to see you"), qsTr("Welcome back"), qsTr("How can I help you today?")];
             return [qsTr("Hey there, %1").arg(userName), qsTr("Good to see you, %1").arg(userName), qsTr("Welcome back, %1").arg(userName), qsTr("How can I help you today?")];
+        }
         const p = root.tab.providerLabel;
         return [qsTr("Hi, I'm %1").arg(p), qsTr("Welcome back, I'm %1").arg(p), qsTr("Good to see you, I'm %1").arg(p), qsTr("How can I help?"), qsTr("What shall we do today?")];
     }

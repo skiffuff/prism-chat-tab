@@ -9,13 +9,7 @@
     "enabled": true,
     "ring_count": 96,
     "sigma": 28,
-    "alpha": 0.42,
-    "gradient": [
-      "#d97757",
-      "#e0a458",
-      "#8c5a3f",
-      "#d97757"
-    ]
+    "alpha": 0.42
   },
   "model_anthropic": "claude-sonnet-4-5"
 }
