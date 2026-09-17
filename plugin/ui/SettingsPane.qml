@@ -1,10 +1,9 @@
 import QtQuick
 import QtQuick.Layouts
 import Caelestia.Config
-import qs.components
-import qs.components.controls
-import qs.services
-import qs.modules.dashboard
+import skiffuff.prism.theme
+import skiffuff.prism
+import skiffuff.prism.ui
 
 // Settings, laid out like the web apps' settings dialogs: a section list on
 // the left, one page on the right, and a save bar underneath that only

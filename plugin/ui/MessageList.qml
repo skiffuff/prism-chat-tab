@@ -1,9 +1,9 @@
 import QtQuick
 import QtQuick.Layouts
 import Caelestia.Config
-import qs.components
-import qs.services
-import qs.modules.dashboard
+import skiffuff.prism.theme
+import skiffuff.prism
+import skiffuff.prism.ui
 
 // The conversation: user turns as brand-coloured bubbles on the right,
 // assistant turns as plain text under a small provider header.

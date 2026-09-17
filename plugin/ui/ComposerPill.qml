@@ -1,8 +1,9 @@
 import QtQuick
 import QtQuick.Layouts
 import Caelestia.Config
-import qs.components
-import qs.services
+import skiffuff.prism.theme
+import skiffuff.prism
+import skiffuff.prism.ui
 
 // Pill composer used by Gemini and ChatGPT: "+" on the left, the prompt in
 // the middle, the send circle on the right. ChatGPT gets the neutral grey of

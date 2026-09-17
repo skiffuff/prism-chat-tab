@@ -1,9 +1,9 @@
 import QtQuick
 import QtQuick.Layouts
 import Caelestia.Config
-import qs.components
-import qs.services
-import qs.modules.dashboard
+import skiffuff.prism.theme
+import skiffuff.prism
+import skiffuff.prism.ui
 
 // Dropdown listing the AI providers reported by the daemon.
 StyledRect {

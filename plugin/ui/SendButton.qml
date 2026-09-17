@@ -1,7 +1,8 @@
 import QtQuick
 import Caelestia.Config
-import qs.components
-import qs.services
+import skiffuff.prism.theme
+import skiffuff.prism
+import skiffuff.prism.ui
 
 // Round send button in the provider colour; grey while there is nothing to
 // send. Bounces on click.

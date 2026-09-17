@@ -1,9 +1,9 @@
 import QtQuick
 import QtQuick.Layouts
 import Caelestia.Config
-import qs.components
-import qs.services
-import qs.modules.dashboard
+import skiffuff.prism.theme
+import skiffuff.prism
+import skiffuff.prism.ui
 
 // Header row: history toggle, brand logo, provider chip, live-watch chip,
 // daemon status dot, model chip and the icon buttons.

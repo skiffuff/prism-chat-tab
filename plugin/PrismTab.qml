@@ -1,14 +1,22 @@
 import QtQuick
 import QtQuick.Layouts
 import Caelestia.Config
-import qs.components
-import qs.services
-import "prism"
+import skiffuff.prism.theme
+import skiffuff.prism
+import skiffuff.prism.ui
 
-// Prism chat tab. This file only holds the shared state and lays the pieces
-// out; every visual block lives in prism/ and receives this item as `tab`.
+// Prism chat tab — the plugin's `dashboard-tab` entry point. This file only
+// holds the shared state and lays the pieces out; every visual block lives in
+// ui/ and receives this item as `tab`.
 Item {
     id: root
+
+    // Injected by the shell's EntryPointLoader: the SettingsObject declared in
+    // Settings.qml (daemon URL, greeting name). One daemon client is shared
+    // by every screen's tab, so the singleton gets it.
+    property var settings: null
+    onSettingsChanged: GeminiChat.settings = root.settings
+    Component.onCompleted: GeminiChat.settings = root.settings
 
     implicitWidth: 840
     implicitHeight: 520

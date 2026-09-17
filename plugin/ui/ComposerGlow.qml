@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Shapes
+import skiffuff.prism.ui
 
 // Soft elliptical glow in the brand colour, like the blue halo behind the
 // prompt on gemini.google.com. Fades in and out with `visible`.

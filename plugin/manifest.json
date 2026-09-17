@@ -1,0 +1,20 @@
+{
+    "name": "prism",
+    "author": "skiffuff",
+    "version": "2.0.0",
+    "description": "Chat with Gemini, Claude or ChatGPT in a dashboard tab that takes the active provider's look. Needs the Prism daemon.",
+    "icon": "auto_awesome",
+    "homepage": "https://github.com/skiffuff/prism-chat-tab/tree/plugin",
+    "requires": ">=2.5.0",
+    "settings": "Settings.qml",
+    "entryPoints": [
+        {
+            "type": "dashboard-tab",
+            "source": "PrismTab.qml",
+            "properties": {
+                "label": "Prism",
+                "icon": "auto_awesome"
+            }
+        }
+    ]
+}

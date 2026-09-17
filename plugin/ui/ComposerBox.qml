@@ -1,8 +1,9 @@
 import QtQuick
 import QtQuick.Layouts
 import Caelestia.Config
-import qs.components
-import qs.services
+import skiffuff.prism.theme
+import skiffuff.prism
+import skiffuff.prism.ui
 
 // Claude-style composer: a warm paper box, the prompt on top, a toolbar row
 // underneath with attach on the left and model + send on the right.

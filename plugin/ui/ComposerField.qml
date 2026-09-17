@@ -1,6 +1,8 @@
 import QtQuick
 import Caelestia.Config
-import qs.services
+import skiffuff.prism.theme
+import skiffuff.prism
+import skiffuff.prism.ui
 
 // Single-line prompt input shared by both composers. Mirrors the service's
 // draft, sends on Enter and routes paste through the clipboard-image hook.

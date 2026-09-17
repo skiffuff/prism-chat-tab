@@ -2,9 +2,9 @@ import QtQuick
 import QtQuick.Layouts
 import Quickshell
 import Caelestia.Config
-import qs.components
-import qs.services
-import qs.modules.dashboard
+import skiffuff.prism.theme
+import skiffuff.prism
+import skiffuff.prism.ui
 
 // Welcome screen shown while the conversation is empty. Each provider gets
 // the feel of its own web app: Gemini a shimmering gradient greeting, ChatGPT
@@ -15,10 +15,10 @@ ColumnLayout {
 
     required property var tab
 
-    // claude.ai greets by first name; the closest thing a desktop has is the
-    // login name. Set PRISM_USER_NAME in the shell's environment to override.
+    // claude.ai greets by first name. The plugin setting wins; otherwise the
+    // closest thing a desktop has is the login name.
     readonly property string userName: {
-        const u = Quickshell.env("PRISM_USER_NAME") || Quickshell.env("USER") || "";
+        const u = GeminiChat.userName || Quickshell.env("PRISM_USER_NAME") || Quickshell.env("USER") || "";
         return u ? u.charAt(0).toUpperCase() + u.slice(1) : "";
     }
 

@@ -2,9 +2,9 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import Caelestia.Config
-import qs.components
-import qs.services
-import qs.modules.dashboard
+import skiffuff.prism.theme
+import skiffuff.prism
+import skiffuff.prism.ui
 
 // Slide-in list of chat sessions (gemini.google.com style overlay) with the
 // scrim behind it and the rename / delete context menu.

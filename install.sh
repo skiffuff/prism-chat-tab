@@ -26,49 +26,65 @@ say "Installing Prism..."
 
 mkdir -p "$HOME/.config/prism" "$HOME/.local/share/prism"
 
-# --- Tab (QML overlay onto the Caelestia shell tree) ---
-# frontend/ mirrors the shell's layout (modules/dashboard, services). It is
-# copied over the shell root: PRISM_SHELL_DIR if set, else the quickshell
-# config dir, else a staging dir you can merge yourself.
-SHELL_DIR="${PRISM_SHELL_DIR:-}"
-if [ -z "$SHELL_DIR" ]; then
-    if [ -d "$HOME/.config/quickshell/caelestia/modules/dashboard" ]; then
-        SHELL_DIR="$HOME/.config/quickshell/caelestia"
-    else
-        SHELL_DIR="$HOME/.local/share/prism/frontend"
-        warn "Caelestia shell dir not found; staging the tab in $SHELL_DIR (copy it over your shell root)"
-    fi
-fi
-FRONTEND_FILES="
-modules/dashboard/PrismTab.qml
-modules/dashboard/GeminiLogo.qml
-modules/dashboard/GeminiGlowOverlay.qml
-modules/dashboard/Tabs.qml
-modules/dashboard/claude_symbol.svg
-modules/dashboard/prism/AttachmentStrip.qml
-modules/dashboard/prism/ComposerBox.qml
-modules/dashboard/prism/ComposerField.qml
-modules/dashboard/prism/ComposerGlow.qml
-modules/dashboard/prism/ComposerPill.qml
-modules/dashboard/prism/EmptyState.qml
-modules/dashboard/prism/GradientText.qml
-modules/dashboard/prism/HistoryDrawer.qml
-modules/dashboard/prism/MessageList.qml
-modules/dashboard/prism/ModelsPanel.qml
-modules/dashboard/prism/PermissionDialog.qml
-modules/dashboard/prism/ProviderPanel.qml
-modules/dashboard/prism/QuotaPanel.qml
-modules/dashboard/prism/SendButton.qml
-modules/dashboard/prism/SettingsPane.qml
-modules/dashboard/prism/TopBar.qml
-services/GeminiChat.qml
-services/GeminiGlow.qml
+# --- Tab (Caelestia plugin) ---
+# The plugin is a self-contained folder the shell discovers in
+# ~/.local/share/caelestia/plugins/<name>/manifest.json (Caelestia >= 2.5 with
+# the plugin system). It is enabled through ~/.config/caelestia/plugins.json or
+# the shell's Plugins page.
+PLUGIN_DIR="${PRISM_PLUGIN_DIR:-$HOME/.local/share/caelestia/plugins/prism}"
+PLUGIN_FILES="
+manifest.json
+Settings.qml
+PrismTab.qml
+GeminiChat.qml
+GeminiLogo.qml
+claude_symbol.svg
+theme/Colours.qml
+theme/StyledText.qml
+theme/StyledRect.qml
+theme/MaterialIcon.qml
+theme/StyledSwitch.qml
+theme/StyledSlider.qml
+ui/AttachmentStrip.qml
+ui/ComposerBox.qml
+ui/ComposerField.qml
+ui/ComposerGlow.qml
+ui/ComposerPill.qml
+ui/EmptyState.qml
+ui/GradientText.qml
+ui/HistoryDrawer.qml
+ui/MessageList.qml
+ui/ModelsPanel.qml
+ui/PermissionDialog.qml
+ui/ProviderPanel.qml
+ui/QuotaPanel.qml
+ui/SendButton.qml
+ui/SettingsPane.qml
+ui/TopBar.qml
 "
-for f in $FRONTEND_FILES; do
-    mkdir -p "$SHELL_DIR/$(dirname "$f")"
-    fetch -o "$SHELL_DIR/$f" "frontend/$f"
+for f in $PLUGIN_FILES; do
+    mkdir -p "$PLUGIN_DIR/$(dirname "$f")"
+    fetch -o "$PLUGIN_DIR/$f" "plugin/$f"
 done
-ok "Installed tab -> $SHELL_DIR"
+ok "Installed plugin -> $PLUGIN_DIR"
+
+# Enable it (plugins.json is the shell's own file; only the enabled list is touched)
+PLUGINS_JSON="$HOME/.config/caelestia/plugins.json"
+mkdir -p "$(dirname "$PLUGINS_JSON")"
+python3 - "$PLUGINS_JSON" <<'PY'
+import json, os, sys
+p = sys.argv[1]
+try:
+    data = json.load(open(p))
+except (OSError, ValueError):
+    data = {}
+enabled = data.setdefault("enabled", [])
+if "skiffuff/prism" not in enabled:
+    enabled.append("skiffuff/prism")
+data.setdefault("path", []); data.setdefault("settings", {})
+json.dump(data, open(p, "w"), indent=4); open(p, "a").write("\n")
+PY
+ok "Enabled skiffuff/prism in $PLUGINS_JSON"
 
 # --- Daemon (entry point + prism/ package) ---
 BACKEND_FILES="
@@ -145,15 +161,15 @@ fi
 printf "
 ${GREEN}Done!${NC}
 
-Now give the daemon your API key (either of these):
-  export GEMINI_API_KEY=your_key     # and/or ANTHROPIC_API_KEY
-  then start:  $VENV/bin/python $HOME/.local/share/prism/prism_daemon.py
+Plugin:  $PLUGIN_DIR  (enabled in ~/.config/caelestia/plugins.json)
+         Needs Caelestia >= 2.5 with the plugin system; the tab shows up in
+         the dashboard as \"Prism\" once the shell has loaded the plugin.
 
-Optional autostart:
-  systemctl --user daemon-reload
-  systemctl --user enable --now prism-daemon
+Daemon:  give it a key and start it
+  export GEMINI_API_KEY=your_key     # or ANTHROPIC_API_KEY / OPENAI_API_KEY
+  systemctl --user daemon-reload && systemctl --user enable --now prism-daemon
 
-Cloudflare worker is NOT required: the daemon calls the Gemini/Claude API
-directly. Set worker_url / anthropic_url in ~/.config/prism/config.json
-only if Google Gemini is blocked in your country.
+Cloudflare worker is NOT required: the daemon calls the vendor APIs directly.
+Set worker_url in ~/.config/prism/config.json only if Gemini is blocked in
+your country.
 "

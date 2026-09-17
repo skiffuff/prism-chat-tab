@@ -1,8 +1,8 @@
 import QtQuick
 import QtQuick.Layouts
 import Caelestia.Config
-import qs.components
-import qs.services
+import skiffuff.prism.theme
+import skiffuff.prism.ui
 
 // run_bash confirmation in the manner of opencode's permission prompt: a
 // monospace body with the request and the command as a pattern list, then a

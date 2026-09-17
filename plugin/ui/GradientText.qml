@@ -1,4 +1,5 @@
 import QtQuick
+import skiffuff.prism.ui
 
 // One line of text filled with a horizontal three-stop gradient.
 //

@@ -1,43 +1,43 @@
 ---
 name: qml-dev
-description: Rules for working with the Prism tab's QML (frontend/ — PrismTab.qml and the prism/ components inside the Caelestia shell). Use when adding or modifying the chat interface, provider theming, layouts, animations, delegates or the permission dialog. Triggers on keywords: QML, QtQuick, PrismTab, prism/, TopBar, EmptyState, Composer, PermissionDialog, GeminiChat, Caelestia, quickshell.
+description: Rules for working with the Prism tab's QML (plugin/ — the Caelestia plugin: PrismTab.qml entry point, ui/ components, theme/ module). Use when adding or modifying the chat interface, provider theming, layouts, animations, delegates or the permission dialog. Triggers on keywords: QML, QtQuick, PrismTab, prism/, TopBar, EmptyState, Composer, PermissionDialog, GeminiChat, Caelestia, quickshell.
 ---
 
-# Prism frontend (QML)
+# Prism plugin (QML)
 
-`frontend/` is an overlay onto the Caelestia shell root (quickshell). It is
-deployed by copying it over the shell tree (`scripts/deploy-local.sh`);
-quickshell hot-reloads files it has already loaded, and loads new ones when
-the dashboard opens.
+`plugin/` is a Caelestia plugin: a folder with `manifest.json`, `Settings.qml`,
+one `dashboard-tab` entry point and QML modules. The shell registers every
+`.qml` in the folder as a type of module `skiffuff.prism` (subfolders become
+`skiffuff.prism.<dir>`) and hot-reloads the plugin when files change.
 
-- `modules/dashboard/PrismTab.qml` — shared state (provider flags, open
-  panel, confirm state) and layout only. Every visual block is a component
-  in `modules/dashboard/prism/` that receives the tab as `required property var tab`.
-- `services/GeminiChat.qml` — singleton daemon client (XHR to 127.0.0.1:5000,
-  `X-Prism-Token` from `~/.local/share/prism/daemon.token`). Refetches
-  providers/models/settings when `/health.started` changes.
-- `modules/dashboard/GeminiLogo.qml` — provider marks: `sparkle`, `claude`,
-  `openai`. Vector shapes take `color`; the Claude image uses `tint`/`tintAmount`.
+- `PrismTab.qml` — the entry point. Shared state (provider flags, open panel,
+  confirm state) and layout only; receives the shell's `settings` object.
+- `ui/*.qml` — every visual block, each with `required property var tab`.
+- `GeminiChat.qml` — singleton daemon client (XHR, `X-Prism-Token`).
+- `theme/` — the plugin's own `Colours` (reads the shell's scheme.json),
+  `StyledText`, `StyledRect`, `MaterialIcon`, `StyledSwitch`, `StyledSlider`.
+- `GeminiLogo.qml` — provider marks: `sparkle`, `claude`, `openai`.
 
 ## Rules
 
-1. Colours come from the shell theme: `Colours.palette.m3*` / `Colours.tPalette.m3*`
-   for surfaces and text, `GeminiChat.providerPrimary/Secondary/Tertiary/Bubble`
-   for brand accents. No hardcoded hex except the status greens/reds already used.
-2. Fonts and spacing come from `Tokens` (`Tokens.font.body.*`, `.mono.*`,
-   `Tokens.padding.*`, `Tokens.spacing.*`, `Tokens.rounding.*`); use the
-   builders (`Tokens.font.body.builders.large.size(26).weight(Font.Medium).build()`)
-   for one-offs.
-3. Provider-specific looks branch on `tab.isGemini / isChatGPT / isClaude`
-   (derived from the daemon's `style` field), never on the provider id.
-4. Delegates use `required property` and their own `id`; ids inside a
-   Repeater/ListView delegate are not addressable from outside. Inline
-   `component X:` definitions must not reference outer ids — pass values in
-   as properties.
-5. Panels open through `tab.togglePanel("provider"|"models"|"quota")`;
-   dialogs through `tab.confirm*`. Keep new state on the tab, not in
-   singletons (one tab instance per monitor).
-6. Verify offscreen before deploying: run an isolated `qs -p <harness>` with
-   `QT_QPA_PLATFORM=offscreen`, a stub `services/Colours.qml` (Hypr/Wallpapers
-   calls stripped), a `GeminiChat.qml` pointed at a sandboxed daemon, and
-   `grabToImage` from a Timer. Never drive the live desktop.
+1. **No `qs.*` imports.** A plugin cannot import the shell's QML
+   (`qs.components`, `qs.services`, …) — it does not resolve outside the
+   config root. Use `skiffuff.prism.theme` for components and `Colours`,
+   `Caelestia.Config` for `Tokens`, `Quickshell*` and `QtQuick*` as usual.
+2. **Explicit self-imports.** Every file that uses a sibling type imports its
+   module: `import skiffuff.prism`, `import skiffuff.prism.ui`,
+   `import skiffuff.prism.theme`. The loader warns on implicit use.
+3. Colours come from `Colours.palette.m3*` / `Colours.tPalette.m3*`; brand
+   accents from `GeminiChat.providerPrimary/Secondary/Tertiary/Bubble`.
+   Fonts and spacing from `Tokens` (builders for one-offs).
+4. Provider-specific looks branch on `tab.isGemini / isChatGPT / isClaude`.
+5. Delegates use `required property` and their own `id`; inline
+   `component X:` definitions must not reference outer ids.
+6. Nothing may depend on shell internals that are not part of the plugin
+   contract (`ShellState`, `Tabs.qml`, overlay windows). If a feature needs
+   one, it stays on `main` until upstream adds an entry point for it.
+7. Verify on the `feat/plugins` build offscreen: install the folder into a
+   sandbox `~/.local/share/caelestia/plugins/prism`, enable it in
+   `plugins.json`, load it with `EntryPointLoader` from a harness `shell.qml`
+   under `QT_QPA_PLATFORM=offscreen` against a daemon on `PRISM_PORT`.
+   Never drive the live desktop.
