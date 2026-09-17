@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 700" width="520" height="700">
+  <!-- Prism · holo sticker with the wordmark as a second die-cut sticker (black letters, white border). One file for light and dark backgrounds. -->
+  <defs>
+    <filter id="diecut" x="-15%" y="-15%" width="130%" height="135%" color-interpolation-filters="sRGB">
+      <feMorphology in="SourceAlpha" operator="dilate" radius="14" result="dil"/>
+      <feFlood flood-color="#FFFFFF" result="white"/>
+      <feComposite in="white" in2="dil" operator="in" result="border"/>
+      <feGaussianBlur in="dil" stdDeviation="7" result="blur"/>
+      <feOffset in="blur" dx="0" dy="10" result="off"/>
+      <feFlood flood-color="#000000" flood-opacity="0.32" result="shcol"/>
+      <feComposite in="shcol" in2="off" operator="in" result="shadow"/>
+      <feMerge><feMergeNode in="shadow"/><feMergeNode in="border"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <linearGradient id="foil" x1="0.1" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#4285F4"/><stop offset="0.28" stop-color="#9B72CB"/>
+      <stop offset="0.5" stop-color="#E38BB0"/><stop offset="0.68" stop-color="#D97757"/>
+      <stop offset="0.84" stop-color="#E0A458"/><stop offset="1" stop-color="#10A37F"/>
+    </linearGradient>
+    <linearGradient id="gloss" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.55"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="triclip"><path d="M260 62 Q276 62 284 78 L452 392 Q462 412 440 412 L80 412 Q58 412 68 392 L236 78 Q244 62 260 62 Z"/></clipPath>
+    <filter id="diecut-text" x="-20%" y="-45%" width="140%" height="200%" color-interpolation-filters="sRGB">
+      <feMorphology in="SourceAlpha" operator="dilate" radius="14" result="dil"/>
+      <feFlood flood-color="#FFFFFF" result="white"/>
+      <feComposite in="white" in2="dil" operator="in" result="border"/>
+      <feGaussianBlur in="dil" stdDeviation="7" result="blur"/>
+      <feOffset in="blur" dx="0" dy="10" result="off"/>
+      <feFlood flood-color="#000000" flood-opacity="0.32" result="shcol"/>
+      <feComposite in="shcol" in2="off" operator="in" result="shadow"/>
+      <feMerge><feMergeNode in="shadow"/><feMergeNode in="border"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <g filter="url(#diecut)">
+    <path d="M260 62 Q276 62 284 78 L452 392 Q462 412 440 412 L80 412 Q58 412 68 392 L236 78 Q244 62 260 62 Z" fill="url(#foil)"/>
+    <g clip-path="url(#triclip)">
+      <polygon points="120,40 230,40 -20,470 -130,470" fill="url(#gloss)"/>
+      <polygon points="300,40 330,40 80,470 50,470" fill="#FFFFFF" fill-opacity="0.35"/>
+      <polygon points="420,40 436,40 186,470 170,470" fill="#FFFFFF" fill-opacity="0.18"/>
+      <path d="M260 120 L400 386 L120 386 Z" fill="none" stroke="#FFFFFF" stroke-opacity="0.85" stroke-width="10" stroke-linejoin="round"/>
+    </g>
+    <path d="M404 84 C408 112 416 120 444 124 C416 128 408 136 404 164 C400 136 392 128 364 124 C392 120 400 112 404 84 Z" fill="#FFFFFF"/>
+    <path d="M444 168 C446 180 450 184 462 186 C450 188 446 192 444 204 C442 192 438 188 426 186 C438 184 442 180 444 168 Z" fill="#FFFFFF"/>
+  </g>
+  <g filter="url(#diecut-text)">
+    <text x="260" y="594" text-anchor="middle" font-family="Noto Sans, Inter, sans-serif" font-weight="800" font-size="118" letter-spacing="-4" fill="#171A26">Prism</text>
+  </g>
+</svg>

@@ -7,6 +7,39 @@ import Quickshell.Io
 Singleton {
     id: root
 
+    // `caelestia shell prism open|toggle|close`: the dashboard straight on the
+    // Prism tab, for a keybind. Prism is always the last dashboard tab.
+    IpcHandler {
+        target: "prism"
+
+        function open(): void {
+            const s = ShellState.forActive();
+            s.dashboardTab = root.dashboardTabIndex;
+            s.dashboard = true;
+        }
+
+        function close(): void {
+            ShellState.forActive().dashboard = false;
+        }
+
+        function toggle(): void {
+            const s = ShellState.forActive();
+            if (s.dashboard && s.dashboardTab === root.dashboardTabIndex) {
+                s.dashboard = false;
+                return;
+            }
+            open();
+        }
+
+        // Re-fetch providers, models, settings and the active chat from the daemon
+        function reload(): void {
+            root._loadAll();
+        }
+    }
+
+    // Index of the Prism tab in the dashboard (dash, media, performance, weather, prism)
+    readonly property int dashboardTabIndex: 4
+
     // PRISM_DAEMON_URL points the tab at a daemon on another port (PRISM_PORT)
     readonly property string daemonUrl: Quickshell.env("PRISM_DAEMON_URL") || "http://127.0.0.1:5000"
     readonly property string tokenPath: Quickshell.env("HOME") + "/.local/share/prism/daemon.token"
