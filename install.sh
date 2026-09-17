@@ -3,7 +3,8 @@
 # Usage: curl -fsSL https://raw.githubusercontent.com/skiffuff/prism-chat-tab/main/install.sh | bash
 set -euo pipefail
 
-REPO_BASE="https://raw.githubusercontent.com/skiffuff/prism-chat-tab/main"
+# PRISM_REPO_BASE lets a checkout install itself (file:///path/to/repo)
+REPO_BASE="${PRISM_REPO_BASE:-https://raw.githubusercontent.com/skiffuff/prism-chat-tab/main}"
 
 CYAN='\033[1;36m'; GREEN='\033[1;32m'; YELLOW='\033[1;33m'; RED='\033[1;31m'; NC='\033[0m'
 say()  { printf "${CYAN}%s${NC}\n" "$*"; }
@@ -26,24 +27,33 @@ say "Installing Prism..."
 
 mkdir -p "$HOME/.config/prism" "$HOME/.local/share/prism"
 
-# --- Tab (QML overlay onto the Caelestia shell tree) ---
-# frontend/ mirrors the shell's layout (modules/dashboard, services). It is
-# copied over the shell root: PRISM_SHELL_DIR if set, else the quickshell
-# config dir, else a staging dir you can merge yourself.
+# --- Tab (QML files + four anchored edits in the Caelestia shell tree) ---
+# The tab is copied into the shell tree and wired into the dashboard by
+# scripts/shell-patch.py (Content.qml, shell.qml, ContentWindow.qml,
+# ServiceLoader.qml; originals kept as *.prism-orig). The tree must be
+# writable: quickshell prefers ~/.config/quickshell/caelestia over the
+# packaged /etc/xdg copy, so a packaged install is copied there first.
 SHELL_DIR="${PRISM_SHELL_DIR:-}"
 if [ -z "$SHELL_DIR" ]; then
-    if [ -d "$HOME/.config/quickshell/caelestia/modules/dashboard" ]; then
+    if [ -f "$HOME/.config/quickshell/caelestia/shell.qml" ]; then
         SHELL_DIR="$HOME/.config/quickshell/caelestia"
+    elif [ -f /etc/xdg/quickshell/caelestia/shell.qml ]; then
+        SHELL_DIR="$HOME/.config/quickshell/caelestia"
+        mkdir -p "$SHELL_DIR"
+        cp -r /etc/xdg/quickshell/caelestia/. "$SHELL_DIR/"
+        chmod -R u+w "$SHELL_DIR"
+        warn "Copied the packaged shell to $SHELL_DIR (quickshell will load this copy from now on)"
     else
-        SHELL_DIR="$HOME/.local/share/prism/frontend"
-        warn "Caelestia shell dir not found; staging the tab in $SHELL_DIR (copy it over your shell root)"
+        printf "${RED}No Caelestia shell tree found.${NC}\n"
+        printf "Set PRISM_SHELL_DIR to a writable copy of the shell (NixOS: mirror the store path first) and rerun.\n"
+        exit 1
     fi
 fi
+
 FRONTEND_FILES="
 modules/dashboard/PrismTab.qml
 modules/dashboard/GeminiLogo.qml
 modules/dashboard/GeminiGlowOverlay.qml
-modules/dashboard/Tabs.qml
 modules/dashboard/claude_symbol.svg
 modules/dashboard/prism/AttachmentStrip.qml
 modules/dashboard/prism/ComposerBox.qml
@@ -64,11 +74,26 @@ modules/dashboard/prism/TopBar.qml
 services/GeminiChat.qml
 services/GeminiGlow.qml
 "
+mkdir -p "$HOME/.local/share/prism"
+fetch -o "$HOME/.local/share/prism/shell-patch.py" scripts/shell-patch.py
+fetch -o "$HOME/.local/share/prism/uninstall.sh" uninstall.sh
+chmod +x "$HOME/.local/share/prism/uninstall.sh"
+
+# Refuse before copying anything if this shell version is not one we know
+if ! python3 "$HOME/.local/share/prism/shell-patch.py" check "$SHELL_DIR" >/dev/null; then
+    python3 "$HOME/.local/share/prism/shell-patch.py" check "$SHELL_DIR" || true
+    printf "${RED}This Caelestia version is not supported by the installer (known: 2.4.x). Nothing was changed.${NC}\n"
+    exit 1
+fi
+
 for f in $FRONTEND_FILES; do
     mkdir -p "$SHELL_DIR/$(dirname "$f")"
     fetch -o "$SHELL_DIR/$f" "frontend/$f"
 done
 ok "Installed tab -> $SHELL_DIR"
+python3 "$HOME/.local/share/prism/shell-patch.py" apply "$SHELL_DIR"
+ok "Wired the tab into the dashboard"
+printf '%s\n' "$SHELL_DIR" > "$HOME/.local/share/prism/shell-dir"
 
 # --- Daemon (entry point + prism/ package) ---
 BACKEND_FILES="
@@ -145,15 +170,16 @@ fi
 printf "
 ${GREEN}Done!${NC}
 
-Now give the daemon your API key (either of these):
-  export GEMINI_API_KEY=your_key     # and/or ANTHROPIC_API_KEY
-  then start:  $VENV/bin/python $HOME/.local/share/prism/prism_daemon.py
+Tab:     $SHELL_DIR  — restart the shell (caelestia shell -k; caelestia shell -d)
+         and Prism is the last dashboard tab.
 
-Optional autostart:
-  systemctl --user daemon-reload
-  systemctl --user enable --now prism-daemon
+Daemon:  give it a key and start it
+  export GEMINI_API_KEY=your_key     # or ANTHROPIC_API_KEY / OPENAI_API_KEY
+  systemctl --user daemon-reload && systemctl --user enable --now prism-daemon
 
-Cloudflare worker is NOT required: the daemon calls the Gemini/Claude API
-directly. Set worker_url / anthropic_url in ~/.config/prism/config.json
-only if Google Gemini is blocked in your country.
+Undo:    ~/.local/share/prism/uninstall.sh   (restores the shell files it changed)
+
+Cloudflare worker is NOT required: the daemon calls the vendor APIs directly.
+Set worker_url in ~/.config/prism/config.json only if Gemini is blocked in
+your country.
 "

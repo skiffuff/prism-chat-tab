@@ -74,23 +74,33 @@ blocked, and **usage tracking** per model with the provider's daily limits surfa
 curl -fsSL https://raw.githubusercontent.com/skiffuff/prism-chat-tab/main/install.sh | bash
 ```
 
-The installer copies the tab over your Caelestia shell tree, puts the daemon into `~/.local/share/prism`
-with its own virtualenv, and writes a user unit. Then give it a key and start it:
+The installer copies the tab into your Caelestia shell tree and wires it into the dashboard with four
+small, marked edits (`Content.qml`, `shell.qml`, `ContentWindow.qml`, `ServiceLoader.qml`; originals kept
+as `*.prism-orig`), puts the daemon into `~/.local/share/prism` with its own virtualenv, and writes a user
+unit. It knows Caelestia **2.4.x**; on any other version it stops before changing anything. A packaged
+shell (`/etc/xdg/quickshell/caelestia`) is first copied to `~/.config/quickshell/caelestia`, which
+quickshell prefers. Then give the daemon a key and start it:
 
 ```bash
 export GEMINI_API_KEY=...            # or ANTHROPIC_API_KEY / OPENAI_API_KEY
 systemctl --user enable --now prism-daemon
 ```
 
-Open the dashboard — Prism is the last tab. Keys can also be pasted into **Settings → Connection**;
-they go to the OS keyring, never to a file.
+Restart the shell (`caelestia shell -k; caelestia shell -d`) and open the dashboard — Prism is the last
+tab. Keys can also be pasted into **Settings → Connection**; they go to the OS keyring, never to a file.
+`~/.local/share/prism/uninstall.sh` puts the shell files back and removes the daemon (`--purge` also
+drops config, sessions and keys).
+
+**Beta — testers wanted.** If you run Caelestia, [TESTING.md](TESTING.md) has a 20-minute checklist and
+the bug template asks for exactly the logs that help.
 
 <details>
 <summary><b>Requirements and optional tools</b></summary>
 
 | Need | Package |
 |---|---|
-| Required | Hyprland + Caelestia shell (quickshell), `python3`, `curl` |
+| Required | Hyprland + Caelestia shell 2.4.x (quickshell), `python3`, `curl` |
+| NixOS | the store tree is read-only: mirror it somewhere writable, launch the shell from the mirror and set `PRISM_SHELL_DIR` to it |
 | Keys in the keyring | a Secret Service provider (GNOME Keyring, KWallet, KeePassXC) |
 | Screen watching | `wf-recorder` (or `ffmpeg` with PipeWire) |
 | Clipboard images | `wl-clipboard` |
@@ -159,6 +169,7 @@ frontend/                      QML overlay onto the Caelestia shell root
   modules/dashboard/PrismTab.qml    state + layout
   modules/dashboard/prism/*.qml     TopBar, EmptyState, composers, PermissionDialog, SettingsPane, …
   services/GeminiChat.qml           daemon client singleton, "prism" IPC target
+scripts/shell-patch.py         wires the tab into a stock shell tree (apply / revert / check)
 
 backend/                       FastAPI daemon, 127.0.0.1:5000
   prism/config.py                   paths, provider registry, config.json
@@ -204,6 +215,8 @@ The tab can be rendered offscreen (`QT_QPA_PLATFORM=offscreen`) against a daemon
 
 | Symptom | Fix |
 |---|---|
+| Installer says the shell version is unsupported | it only patches trees it recognises (2.4.x) and changed nothing — open an issue with your version |
+| Tab missing after install | the shell must be restarted; check `caelestia shell -l` for `PrismTab` errors |
 | Daemon won't start | `~/.local/share/prism/venv/bin/pip install -r ~/.local/share/prism/requirements.txt` |
 | Provider says *no key* | export the env var or paste the key in Settings → Connection |
 | Gemini blocked in your region | set `worker_url` to a Cloudflare worker that proxies `generativelanguage.googleapis.com` |

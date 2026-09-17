@@ -1,0 +1,54 @@
+name: Bug report
+description: Something in the tab or the daemon does not work
+labels: [bug]
+body:
+  - type: input
+    id: shell
+    attributes:
+      label: Caelestia shell version
+      description: "`caelestia shell -s | head -1` or the package version. Prism's installer supports 2.4.x."
+      placeholder: "2.4.0 (AUR) / 750e67d (flake)"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install Prism?
+      options:
+        - install.sh (curl | bash)
+        - scripts/deploy-local.sh from a checkout
+        - by hand
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider
+      options: [Gemini, Claude, ChatGPT, several / not provider-specific]
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you saw. A screenshot or GIF of the tab helps a lot.
+    validations:
+      required: true
+  - type: textarea
+    id: shell-log
+    attributes:
+      label: Shell log
+      description: "`caelestia shell -l 2>&1 | grep -iE 'prism|gemini|error|warn' | tail -50`"
+      render: text
+  - type: textarea
+    id: daemon-log
+    attributes:
+      label: Daemon log
+      description: "`journalctl --user -u prism-daemon -n 50 --no-pager` (keys and tokens are redacted by the daemon, but check before pasting)"
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: "`curl -s http://127.0.0.1:5000/health` answers `{\"status\": \"ok\", …}`"
+        - label: The tab appears in the dashboard (last tab)
+        - label: I ran `~/.local/share/prism/uninstall.sh` and reinstalled (optional, if it looked like a stale install)

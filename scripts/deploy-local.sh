@@ -19,6 +19,13 @@ echo "backend  -> $DAEMON_DIR"
 if [ -d "$SHELL_DIR/modules/dashboard" ]; then
     cp -r "$ROOT/frontend/." "$SHELL_DIR/"
     echo "frontend -> $SHELL_DIR"
+    # Wire the tab in when the tree is a stock one; a tree that is already
+    # wired some other way (e.g. a patched package) is left alone.
+    if python3 "$ROOT/scripts/shell-patch.py" check "$SHELL_DIR" >/dev/null 2>&1; then
+        python3 "$ROOT/scripts/shell-patch.py" apply "$SHELL_DIR"
+    else
+        echo "shell tree not patched by shell-patch.py (already wired or unsupported); left as is"
+    fi
 else
     echo "shell dir $SHELL_DIR has no modules/dashboard; frontend not copied" >&2
 fi

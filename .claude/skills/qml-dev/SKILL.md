@@ -6,7 +6,8 @@ description: Rules for working with the Prism tab's QML (frontend/ — PrismTab.
 # Prism frontend (QML)
 
 `frontend/` is an overlay onto the Caelestia shell root (quickshell). It is
-deployed by copying it over the shell tree (`scripts/deploy-local.sh`);
+deployed by copying it over the shell tree and wiring the tab in with
+`scripts/shell-patch.py` (`scripts/deploy-local.sh` does both);
 quickshell hot-reloads files it has already loaded, and loads new ones when
 the dashboard opens.
 
