@@ -28,7 +28,7 @@ async def watch_stop(request: Request):
 async def watch_status(request: Request):
     if not authed(request):
         return unauthorized()
-    return reply({"active": is_recording(), "hint": "", "updated": 0})
+    return reply({"active": is_recording()})
 
 
 @router.get("/health")

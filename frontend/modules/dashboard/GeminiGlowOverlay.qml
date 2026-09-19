@@ -139,7 +139,7 @@ Scope {
                     opacity: Math.min(1, content.u * 1.5)
 
                     Repeater {
-                        model: 96
+                        model: GeminiChat.settingsData?.glow?.ring_count ?? 96
 
                         delegate: Shape {
                             id: ring
@@ -148,7 +148,8 @@ Scope {
 
                             readonly property real inset: modelData
                             readonly property real thickness: 2.4
-                            readonly property real ringAlpha: 0.42 * Math.exp(-Math.pow(modelData, 2) / (2 * 28 * 28))
+                            readonly property real sigma: GeminiChat.settingsData?.glow?.sigma ?? 28
+                            readonly property real ringAlpha: (GeminiChat.settingsData?.glow?.alpha ?? 0.42) * Math.exp(-Math.pow(modelData, 2) / (2 * ring.sigma * ring.sigma))
 
                             anchors.fill: parent
                             opacity: ringAlpha
@@ -224,157 +225,105 @@ Scope {
                     }
 
                     // Right wall segment
-                    Item {
+                    CometEdge {
                         x: content.width - 6
                         y: 0
                         width: 6
                         height: Math.max(0, content.wallH + 2)
-                        clip: true
-
-                        Shape {
-                            width: content.width
-                            height: content.height
-                            preferredRendererType: Shape.GeometryRenderer
-                            asynchronous: false
-
-                            ShapePath {
-                                strokeWidth: 9
-                                strokeColor: Qt.rgba(content.headColor.r, content.headColor.g, content.headColor.b, 0.25)
-                                fillColor: "transparent"
-                                capStyle: ShapePath.RoundCap
-
-                                startX: content.width / 2
-                                startY: 1.5
-                                PathLine { x: content.width - 1.5; y: 1.5 }
-                                PathLine { x: content.width - 1.5; y: content.height - 1.5 }
-                            }
-
-                            ShapePath {
-                                strokeWidth: 3
-                                strokeColor: content.headColor
-                                fillColor: "transparent"
-                                capStyle: ShapePath.RoundCap
-
-                                startX: content.width / 2
-                                startY: 1.5
-                                PathLine { x: content.width - 1.5; y: 1.5 }
-                                PathLine { x: content.width - 1.5; y: content.height - 1.5 }
-                            }
-                        }
+                        headColor: content.headColor
+                        canvasWidth: content.width
+                        canvasHeight: content.height
+                        x1: content.width / 2; y1: 1.5
+                        x2: content.width - 1.5; y2: 1.5
+                        x3: content.width - 1.5; y3: content.height - 1.5
                     }
 
                     // Right bottom segment
-                    Item {
+                    CometEdge {
                         x: content.width - content.botW - 2
                         y: content.height - 6
                         width: Math.max(0, content.botW + 2)
                         height: 6
-                        clip: true
-
-                        Shape {
-                            width: content.width
-                            height: content.height
-                            preferredRendererType: Shape.GeometryRenderer
-                            asynchronous: false
-
-                            ShapePath {
-                                strokeWidth: 9
-                                strokeColor: Qt.rgba(content.headColor.r, content.headColor.g, content.headColor.b, 0.25)
-                                fillColor: "transparent"
-                                capStyle: ShapePath.RoundCap
-
-                                startX: content.width - 1.5
-                                startY: content.height - 1.5
-                                PathLine { x: content.width / 2; y: content.height - 1.5 }
-                            }
-
-                            ShapePath {
-                                strokeWidth: 3
-                                strokeColor: content.headColor
-                                fillColor: "transparent"
-                                capStyle: ShapePath.RoundCap
-
-                                startX: content.width - 1.5
-                                startY: content.height - 1.5
-                                PathLine { x: content.width / 2; y: content.height - 1.5 }
-                            }
-                        }
+                        headColor: content.headColor
+                        canvasWidth: content.width
+                        canvasHeight: content.height
+                        x1: content.width - 1.5; y1: content.height - 1.5
+                        x3: content.width / 2; y3: content.height - 1.5
                     }
 
                     // Left wall segment
-                    Item {
+                    CometEdge {
                         x: 0
                         y: 0
                         width: 6
                         height: Math.max(0, content.wallH + 2)
-                        clip: true
-
-                        Shape {
-                            width: content.width
-                            height: content.height
-                            preferredRendererType: Shape.GeometryRenderer
-                            asynchronous: false
-
-                            ShapePath {
-                                strokeWidth: 9
-                                strokeColor: Qt.rgba(content.headColor.r, content.headColor.g, content.headColor.b, 0.25)
-                                fillColor: "transparent"
-                                capStyle: ShapePath.RoundCap
-
-                                startX: content.width / 2
-                                startY: 1.5
-                                PathLine { x: 1.5; y: 1.5 }
-                                PathLine { x: 1.5; y: content.height - 1.5 }
-                            }
-
-                            ShapePath {
-                                strokeWidth: 3
-                                strokeColor: content.headColor
-                                fillColor: "transparent"
-                                capStyle: ShapePath.RoundCap
-
-                                startX: content.width / 2
-                                startY: 1.5
-                                PathLine { x: 1.5; y: 1.5 }
-                                PathLine { x: 1.5; y: content.height - 1.5 }
-                            }
-                        }
+                        headColor: content.headColor
+                        canvasWidth: content.width
+                        canvasHeight: content.height
+                        x1: content.width / 2; y1: 1.5
+                        x2: 1.5; y2: 1.5
+                        x3: 1.5; y3: content.height - 1.5
                     }
 
                     // Left bottom segment
-                    Item {
+                    CometEdge {
                         x: 0
                         y: content.height - 6
                         width: Math.max(0, content.botW + 2)
                         height: 6
+                        headColor: content.headColor
+                        canvasWidth: content.width
+                        canvasHeight: content.height
+                        x1: 1.5; y1: content.height - 1.5
+                        x3: content.width / 2; y3: content.height - 1.5
+                    }
+
+                    // One straight-or-cornered comet trail, clipped to its own
+                    // Item rect; x2/y2 default to the start point, so a
+                    // 2-point (bottom) segment just omits the corner.
+                    component CometEdge: Item {
+                        id: edge
+
+                        required property color headColor
+                        required property real canvasWidth
+                        required property real canvasHeight
+                        required property real x1
+                        required property real y1
+                        property real x2: x1
+                        property real y2: y1
+                        required property real x3
+                        required property real y3
+
                         clip: true
 
                         Shape {
-                            width: content.width
-                            height: content.height
+                            width: edge.canvasWidth
+                            height: edge.canvasHeight
                             preferredRendererType: Shape.GeometryRenderer
                             asynchronous: false
 
                             ShapePath {
                                 strokeWidth: 9
-                                strokeColor: Qt.rgba(content.headColor.r, content.headColor.g, content.headColor.b, 0.25)
+                                strokeColor: Qt.rgba(edge.headColor.r, edge.headColor.g, edge.headColor.b, 0.25)
                                 fillColor: "transparent"
                                 capStyle: ShapePath.RoundCap
 
-                                startX: 1.5
-                                startY: content.height - 1.5
-                                PathLine { x: content.width / 2; y: content.height - 1.5 }
+                                startX: edge.x1
+                                startY: edge.y1
+                                PathLine { x: edge.x2; y: edge.y2 }
+                                PathLine { x: edge.x3; y: edge.y3 }
                             }
 
                             ShapePath {
                                 strokeWidth: 3
-                                strokeColor: content.headColor
+                                strokeColor: edge.headColor
                                 fillColor: "transparent"
                                 capStyle: ShapePath.RoundCap
 
-                                startX: 1.5
-                                startY: content.height - 1.5
-                                PathLine { x: content.width / 2; y: content.height - 1.5 }
+                                startX: edge.x1
+                                startY: edge.y1
+                                PathLine { x: edge.x2; y: edge.y2 }
+                                PathLine { x: edge.x3; y: edge.y3 }
                             }
                         }
                     }

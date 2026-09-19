@@ -18,7 +18,6 @@ Item {
     // Brand palette (follows the active AI provider)
     readonly property color gBlue: GeminiChat.providerPrimary
     readonly property color gViolet: GeminiChat.providerSecondary
-    readonly property color gRed: GeminiChat.providerTertiary
 
     readonly property string providerLabel: GeminiChat.providerName
     readonly property string providerShape: GeminiChat.providerInfo?.logo ?? "sparkle"

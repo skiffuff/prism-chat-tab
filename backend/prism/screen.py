@@ -4,6 +4,7 @@ user's session (env for subprocesses, clipboard, file picker)."""
 
 import base64
 import os
+import time
 import re
 import shutil
 import signal
@@ -13,7 +14,7 @@ import threading
 from . import providers
 from .config import CACHE_DIR, GLOW_FLAG, RECORD_FILE, SCREEN_TRIGGER_PHRASES, rt
 from .security import redact
-from .sessions import active_session, now_ts, save_sessions, store_lock
+from .sessions import active_session, save_sessions, store_lock
 
 SCREEN_TRIGGER_RE = re.compile("|".join(SCREEN_TRIGGER_PHRASES), re.IGNORECASE)
 
@@ -150,7 +151,7 @@ def stop_recording_and_analyze() -> str:
         sess = active_session()
         sess["messages"].append({"role": "user", "parts": [{"text": "[Видеозапись экрана]"}]})
         sess["messages"].append({"role": "assistant", "parts": [{"text": answer}]})
-        sess["updated"] = now_ts()
+        sess["updated"] = time.time()
         save_sessions()
     return answer
 

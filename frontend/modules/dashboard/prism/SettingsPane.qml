@@ -50,6 +50,9 @@ Item {
     // Working copy of the glow gradient; swatches edit this, save sends it
     property var gradient: []
 
+    // Cycle order for the swatch click handler below
+    readonly property var swatchPalette: ["#4285f4", "#9b72cb", "#d96570", "#e9a23b", "#4fa267", "#ea6c69", "#10a37f", "#74aa9c", "#d97757", "#c96442", "#f5a524", "#ffffff"]
+
     readonly property bool dirty: keyInput.text.length > 0
         || sysInput.text !== (root.sd?.system_instruction ?? "")
         || (!root.tab.isGemini && endpointInput.text.trim() !== root.endpointValue)
@@ -440,7 +443,8 @@ Item {
 
                         visible: !!root.sd?.api_key_set
                         label: armed ? qsTr("Click again to remove the stored key") : qsTr("Remove stored key")
-                        danger: armed
+                        borderColour: armed ? root.bad : Qt.alpha(Colours.palette.m3outlineVariant, 0.8)
+                        labelColour: armed ? root.bad : Colours.palette.m3onSurface
                         onClicked: {
                             if (!armed) {
                                 armed = true;
@@ -735,7 +739,7 @@ Item {
                                     // Click cycles a small palette; right-click goes back
                                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                                     onClicked: mouse => {
-                                        const palette = ["#4285f4", "#9b72cb", "#d96570", "#e9a23b", "#4fa267", "#ea6c69", "#10a37f", "#74aa9c", "#d97757", "#c96442", "#f5a524", "#ffffff"];
+                                        const palette = root.swatchPalette;
                                         const cur = swatch.modelData.toLowerCase();
                                         let idx = palette.indexOf(cur);
                                         const step = mouse.button === Qt.RightButton ? -1 : 1;
@@ -810,7 +814,8 @@ Item {
 
                         SmallButton {
                             label: qsTr("Deny")
-                            danger: true
+                            borderColour: root.bad
+                            labelColour: root.bad
                             enabled: ruleInput.text.trim().length > 0
                             onClicked: root.addRule("deny")
                         }
@@ -1082,7 +1087,8 @@ Item {
         id: sb
 
         required property string label
-        property bool danger: false
+        property color borderColour: Qt.alpha(Colours.palette.m3outlineVariant, 0.8)
+        property color labelColour: Colours.palette.m3onSurface
 
         signal clicked()
 
@@ -1091,7 +1097,7 @@ Item {
         radius: Tokens.rounding.medium
         color: sbArea.containsMouse && enabled ? Colours.tPalette.m3surfaceContainerHighest : "transparent"
         border.width: 1
-        border.color: sb.danger ? "#f38ba8" : Qt.alpha(Colours.palette.m3outlineVariant, 0.8)
+        border.color: sb.borderColour
         opacity: enabled ? 1 : 0.45
 
         StyledText {
@@ -1100,7 +1106,7 @@ Item {
             anchors.centerIn: parent
             text: sb.label
             font: Tokens.font.body.small
-            color: sb.danger ? "#f38ba8" : Colours.palette.m3onSurface
+            color: sb.labelColour
         }
 
         MouseArea {

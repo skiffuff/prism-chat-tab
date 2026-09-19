@@ -14,7 +14,7 @@ import time
 
 from fastapi import Request
 
-from .config import HOME, PERMISSIONS_FILE, TOKEN_FILE, rt
+from .config import HOME, PERMISSIONS_FILE, TOKEN_FILE, rt, write_private
 
 # ══════════════════════════════════════════════════════════════════════
 # Daemon token
@@ -33,11 +33,10 @@ def _load_token() -> str:
 def ensure_token_file() -> None:
     """Generate a random daemon token on first start, stored with 0600 perms."""
     try:
-        os.makedirs(os.path.dirname(TOKEN_FILE), exist_ok=True)
         if not os.path.exists(TOKEN_FILE) or os.path.getsize(TOKEN_FILE) == 0:
-            with open(TOKEN_FILE, "w", encoding="utf-8") as f:
-                f.write(secrets.token_urlsafe(32))
-        os.chmod(TOKEN_FILE, 0o600)
+            write_private(TOKEN_FILE, secrets.token_urlsafe(32))
+        else:
+            os.chmod(TOKEN_FILE, 0o600)
     except OSError:
         pass
 
@@ -467,22 +466,9 @@ def load_rules() -> list:
 
 def save_rules(rules) -> None:
     try:
-        os.makedirs(os.path.dirname(PERMISSIONS_FILE), exist_ok=True)
-        with open(PERMISSIONS_FILE, "w", encoding="utf-8") as f:
-            json.dump({"rules": rules}, f, indent=2, ensure_ascii=False)
-        os.chmod(PERMISSIONS_FILE, 0o600)
+        write_private(PERMISSIONS_FILE, json.dumps({"rules": rules}, indent=2, ensure_ascii=False))
     except OSError:
         pass
-
-
-def allowed_patterns() -> list:
-    return [r["pattern"] for r in load_rules() if r["action"] == "allow"]
-
-
-def _save_allowed_patterns(patterns) -> None:
-    """Replace the allow-rules (deny-rules are kept). Used by tests."""
-    keep = [r for r in load_rules() if r["action"] != "allow"]
-    save_rules(keep + [{"pattern": p, "action": "allow", "added": int(time.time())} for p in patterns])
 
 
 def matches_pattern(command: str, pattern: str) -> bool:
@@ -505,14 +491,6 @@ def matching_rule(command: str):
             if r["action"] == action and matches_pattern(command, r["pattern"]):
                 return r
     return None
-
-
-def command_ok_by_pattern(command: str) -> bool:
-    """Does a stored allow-rule cover the command (and is it not dangerous)?"""
-    if is_dangerous(command):
-        return False
-    r = matching_rule(command)
-    return bool(r and r["action"] == "allow")
 
 
 def pattern_candidates(command: str) -> list:
@@ -579,8 +557,6 @@ def remove_rule(pattern: str) -> bool:
     save_rules(kept)
     return True
 
-
-revoke_pattern = remove_rule
 
 
 def grant_pattern(command: str, pattern: str = None) -> bool:

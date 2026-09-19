@@ -5,16 +5,15 @@ import os
 import threading
 import time
 
-from .config import SESSIONS_FILE, USAGE_FILE, secure_file
+from .config import SESSIONS_FILE, USAGE_FILE, write_private
 
 DEFAULT_DAILY_LIMIT = 20
 MAX_TURNS = 40  # history window sent to the model
 
-now_ts = time.time
 
 
 def _new_session() -> dict:
-    return {"id": str(now_ts()), "title": "New chat", "updated": now_ts(), "messages": []}
+    return {"id": str(time.time()), "title": "New chat", "updated": time.time(), "messages": []}
 
 
 def _load_sessions() -> dict:
@@ -39,10 +38,7 @@ if not store.get("active_id") or not any(s["id"] == store["active_id"] for s in 
 
 def save_sessions() -> None:
     try:
-        os.makedirs(os.path.dirname(SESSIONS_FILE), exist_ok=True)
-        with open(SESSIONS_FILE, "w", encoding="utf-8") as f:
-            json.dump(store, f, ensure_ascii=False, indent=2)
-        secure_file(SESSIONS_FILE)
+        write_private(SESSIONS_FILE, json.dumps(store, ensure_ascii=False, indent=2))
     except OSError:
         pass
 
@@ -142,10 +138,7 @@ def load_usage() -> None:
 
 def save_usage() -> None:
     try:
-        os.makedirs(os.path.dirname(USAGE_FILE), exist_ok=True)
-        with open(USAGE_FILE, "w", encoding="utf-8") as f:
-            json.dump(usage, f)
-        os.chmod(USAGE_FILE, 0o600)
+        write_private(USAGE_FILE, json.dumps(usage))
     except OSError:
         pass
 

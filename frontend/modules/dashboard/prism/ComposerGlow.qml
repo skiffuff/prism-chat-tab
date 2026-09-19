@@ -7,7 +7,6 @@ Item {
     id: root
 
     property color colour: "#4285F4"
-    property real strength: 0.32
 
     opacity: visible ? 1 : 0
 
@@ -47,11 +46,11 @@ Item {
 
                 GradientStop {
                     position: 0
-                    color: Qt.alpha(root.colour, root.strength)
+                    color: Qt.alpha(root.colour, 0.32)
                 }
                 GradientStop {
                     position: 0.45
-                    color: Qt.alpha(root.colour, root.strength * 0.35)
+                    color: Qt.alpha(root.colour, 0.112)
                 }
                 GradientStop {
                     position: 1

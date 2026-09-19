@@ -76,7 +76,6 @@ Singleton {
     property var sessionsList: []
     property string activeSessionId: ""
     property bool watchActive: false
-    property int watchUpdated: 0
 
     property string currentProvider: "gemini"
     property var providersList: []
@@ -150,61 +149,63 @@ Singleton {
     }
 
 
-    function loadHistory() {
+    // GET/POST wrapper for the common shape below: token header, JSON body
+    // and Content-Type when there is one, JSON.parse the reply, ignore
+    // anything that isn't a plain 200 (the odd handler that needs more
+    // than that keeps its own xhr, e.g. sendMessage, confirmTool).
+    function _request(method, path, body, onOk) {
         const xhr = _xhr();
-        xhr.open("GET", `${daemonUrl}/history`);
+        xhr.open(method, `${daemonUrl}${path}`);
         if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
+        if (body !== undefined) xhr.setRequestHeader("Content-Type", "application/json; charset=utf-8");
         xhr.onreadystatechange = () => {
             if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
                 try {
-                    const res = JSON.parse(xhr.responseText);
-                    if (res.history && res.history.length > 0) {
-                        chatModel.clear();
-                        for (let i = 0; i < res.history.length; i++) {
-                            const item = res.history[i];
-                            const role = item.role === "user" ? "user" : "assistant";
-                            let text = "";
-                            let imgs = [];
-                            if (item.parts && item.parts.length > 0) {
-                                for (let p = 0; p < item.parts.length; p++) {
-                                    if (item.parts[p].text)
-                                        text += item.parts[p].text + "\n";
-                                    else if (item.parts[p].functionCall)
-                                        text += "";
-                                    else if (item.parts[p].inline_data) {
-                                        imgs.push({
-                                            mime: item.parts[p].inline_data.mime_type || "image/png",
-                                            data: item.parts[p].inline_data.data || ""
-                                        });
-                                    } else if (item.parts[p].type === "image") {
-                                        imgs.push({
-                                            mime: item.parts[p].mime || "image/png",
-                                            data: item.parts[p].data || ""
-                                        });
-                                    }
-                                }
-                            }
-                            text = text.trim();
-                            if (text || imgs.length > 0)
-                                chatModel.append({ sender: role, text, images: imgs });
-                        }
-                    }
+                    onOk(JSON.parse(xhr.responseText));
                 } catch (e) {}
             }
         };
-        xhr.send();
+        xhr.send(body !== undefined ? JSON.stringify(body) : undefined);
+    }
+
+    function loadHistory() {
+        _request("GET", "/history", undefined, res => {
+            if (res.history && res.history.length > 0) {
+                chatModel.clear();
+                for (let i = 0; i < res.history.length; i++) {
+                    const item = res.history[i];
+                    const role = item.role === "user" ? "user" : "assistant";
+                    let text = "";
+                    let imgs = [];
+                    if (item.parts && item.parts.length > 0) {
+                        for (let p = 0; p < item.parts.length; p++) {
+                            if (item.parts[p].text)
+                                text += item.parts[p].text + "\n";
+                            else if (item.parts[p].functionCall)
+                                text += "";
+                            else if (item.parts[p].inline_data) {
+                                imgs.push({
+                                    mime: item.parts[p].inline_data.mime_type || "image/png",
+                                    data: item.parts[p].inline_data.data || ""
+                                });
+                            } else if (item.parts[p].type === "image") {
+                                imgs.push({
+                                    mime: item.parts[p].mime || "image/png",
+                                    data: item.parts[p].data || ""
+                                });
+                            }
+                        }
+                    }
+                    text = text.trim();
+                    if (text || imgs.length > 0)
+                        chatModel.append({ sender: role, text, images: imgs });
+                }
+            }
+        });
     }
 
     function clearHistory() {
-        const xhr = _xhr();
-        xhr.open("POST", `${daemonUrl}/clear`);
-        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
-        xhr.onreadystatechange = () => {
-            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
-                chatModel.clear();
-            }
-        };
-        xhr.send();
+        _request("POST", "/clear", undefined, () => chatModel.clear());
     }
 
     function addAttachment(a) {
@@ -262,142 +263,67 @@ Singleton {
         repeat: true
         triggeredOnStart: true
 
-        onTriggered: {
-            const xhr = _xhr();
-            xhr.open("GET", `${daemonUrl}/watch/status`);
-            if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
-            xhr.onreadystatechange = () => {
-                if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
-                    try {
-                        const res = JSON.parse(xhr.responseText);
-                        const wasActive = watchActive;
-                        watchActive = res.active;
-                        if (res.updated > watchUpdated && res.hint) {
-                            chatModel.append({ sender: "assistant", text: "👁 " + res.hint });
-                            watchUpdated = res.updated;
-                        }
-                        if (wasActive && !res.active)
-                            watchUpdated = 0;
-                    } catch (e) {}
-                }
-            };
-            xhr.send();
-        }
+        onTriggered: root._request("GET", "/watch/status", undefined, res => watchActive = res.active)
     }
 
     function loadSessions() {
-        const xhr = _xhr();
-        xhr.open("GET", `${daemonUrl}/sessions`);
-        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
-        xhr.onreadystatechange = () => {
-            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
-                try {
-                    const res = JSON.parse(xhr.responseText);
-                    sessionsList = res.sessions ?? [];
-                    activeSessionId = res.active_id ?? "";
-                } catch (e) {}
-            }
-        };
-        xhr.send();
+        _request("GET", "/sessions", undefined, res => {
+            sessionsList = res.sessions ?? [];
+            activeSessionId = res.active_id ?? "";
+        });
     }
 
     function newChat() {
-        const xhr = _xhr();
-        xhr.open("POST", `${daemonUrl}/session/new`);
-        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
-        xhr.onreadystatechange = () => {
-            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
-                chatModel.clear();
-                draft = "";
-                statusText = "Ready";
-                loadSessions();
-                chatReset();
-            }
-        };
-        xhr.send();
+        _request("POST", "/session/new", undefined, () => {
+            chatModel.clear();
+            draft = "";
+            statusText = "Ready";
+            loadSessions();
+            chatReset();
+        });
     }
 
     function selectSession(id) {
-        const xhr = _xhr();
-        xhr.open("POST", `${daemonUrl}/session/select`);
-        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
-        xhr.setRequestHeader("Content-Type", "application/json; charset=utf-8");
-        xhr.onreadystatechange = () => {
-            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
-                chatModel.clear();
-                loadHistory();
-                loadSessions();
-            }
-        };
-        xhr.send(JSON.stringify({ id }));
+        _request("POST", "/session/select", { id }, () => {
+            chatModel.clear();
+            loadHistory();
+            loadSessions();
+        });
     }
 
     function renameSession(id, title) {
-        const xhr = _xhr();
-        xhr.open("POST", `${daemonUrl}/session/rename`);
-        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
-        xhr.setRequestHeader("Content-Type", "application/json; charset=utf-8");
-        xhr.onreadystatechange = () => {
-            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200)
-                loadSessions();
-        };
-        xhr.send(JSON.stringify({ id, title }));
+        _request("POST", "/session/rename", { id, title }, () => loadSessions());
     }
 
     function deleteSession(id) {
         const wasActive = id === activeSessionId;
-        const xhr = _xhr();
-        xhr.open("POST", `${daemonUrl}/session/delete`);
-        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
-        xhr.setRequestHeader("Content-Type", "application/json; charset=utf-8");
-        xhr.onreadystatechange = () => {
-            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
-                loadSessions();
-                if (wasActive) {
-                    chatModel.clear();
-                    loadHistory();
-                }
+        _request("POST", "/session/delete", { id }, () => {
+            loadSessions();
+            if (wasActive) {
+                chatModel.clear();
+                loadHistory();
             }
-        };
-        xhr.send(JSON.stringify({ id }));
+        });
     }
 
     function pickFile() {
-        const xhr = _xhr();
-        xhr.open("POST", `${daemonUrl}/pick_file`);
-        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
-        xhr.onreadystatechange = () => {
-            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
-                try {
-                    const res = JSON.parse(xhr.responseText);
-                    if (res.data)
-                        addAttachment(res);
-                    else if (res.path)
-                        readFile(res.path);
-                } catch (e) {}
-            }
-        };
-        xhr.send();
+        _request("POST", "/pick_file", undefined, res => {
+            if (res.data)
+                addAttachment(res);
+            else if (res.path)
+                readFile(res.path);
+        });
     }
 
     function pasteFromClipboard(onFail) {
-        const xhr = _xhr();
-        xhr.open("POST", `${daemonUrl}/clipboard_image`);
-        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
-        xhr.onreadystatechange = () => {
-            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
-                try {
-                    const res = JSON.parse(xhr.responseText);
-                    if (res.data) {
-                        addAttachment(res);
-                        statusText = "Ready";
-                    } else if (onFail) {
-                        onFail(res.error);
-                    }
-                } catch (e) {}
+        _request("POST", "/clipboard_image", undefined, res => {
+            if (res.data) {
+                addAttachment(res);
+                statusText = "Ready";
+            } else if (onFail) {
+                onFail(res.error);
             }
-        };
-        xhr.send();
+        });
     }
 
     function sendMessage(msg) {
@@ -462,77 +388,27 @@ Singleton {
     }
 
     function loadModels() {
-        const xhr = _xhr();
-        xhr.open("GET", `${daemonUrl}/models`);
-        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
-        xhr.onreadystatechange = () => {
-            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
-                try {
-                    modelsList = JSON.parse(xhr.responseText).models;
-                } catch (e) {}
-            }
-        };
-        xhr.send();
+        _request("GET", "/models", undefined, res => modelsList = res.models);
     }
 
     function loadCurrentModel() {
-        const xhr = _xhr();
-        xhr.open("GET", `${daemonUrl}/model`);
-        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
-        xhr.onreadystatechange = () => {
-            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
-                try {
-                    currentModel = JSON.parse(xhr.responseText).model;
-                } catch (e) {}
-            }
-        };
-        xhr.send();
+        _request("GET", "/model", undefined, res => currentModel = res.model);
     }
 
     function selectModel(name) {
-        const xhr = _xhr();
-        xhr.open("POST", `${daemonUrl}/model`);
-        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
-        xhr.setRequestHeader("Content-Type", "application/json; charset=utf-8");
-        xhr.onreadystatechange = () => {
-            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
-                try {
-                    currentModel = JSON.parse(xhr.responseText).model;
-                } catch (e) {}
-            }
-        };
-        xhr.send(JSON.stringify({ model: name }));
+        _request("POST", "/model", { model: name }, res => currentModel = res.model);
     }
 
     function loadQuota() {
-        const xhr = _xhr();
-        xhr.open("GET", `${daemonUrl}/quota`);
-        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
-        xhr.onreadystatechange = () => {
-            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
-                try {
-                    quotaData = JSON.parse(xhr.responseText);
-                } catch (e) {}
-            }
-        };
-        xhr.send();
+        _request("GET", "/quota", undefined, res => quotaData = res);
     }
 
     function loadProviders() {
-        const xhr = _xhr();
-        xhr.open("GET", `${daemonUrl}/providers`);
-        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
-        xhr.onreadystatechange = () => {
-            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
-                try {
-                    const res = JSON.parse(xhr.responseText);
-                    const prev = currentProvider;
-                    providersList = res.providers ?? [];
-                    currentProvider = res.current ?? prev;
-                } catch (e) {}
-            }
-        };
-        xhr.send();
+        _request("GET", "/providers", undefined, res => {
+            const prev = currentProvider;
+            providersList = res.providers ?? [];
+            currentProvider = res.current ?? prev;
+        });
     }
 
     function selectProvider(id) {
@@ -565,17 +441,7 @@ Singleton {
     property var settingsData: null
 
     function loadSettings() {
-        const xhr = _xhr();
-        xhr.open("GET", `${daemonUrl}/settings`);
-        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
-        xhr.onreadystatechange = () => {
-            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
-                try {
-                    settingsData = JSON.parse(xhr.responseText);
-                } catch (e) {}
-            }
-        };
-        xhr.send();
+        _request("GET", "/settings", undefined, res => settingsData = res);
     }
 
     function saveSettings(data) {
@@ -606,17 +472,7 @@ Singleton {
     signal permissionError(string error)
 
     function loadPermissions() {
-        const xhr = _xhr();
-        xhr.open("GET", `${daemonUrl}/permissions`);
-        if (root.authToken) xhr.setRequestHeader("X-Prism-Token", root.authToken);
-        xhr.onreadystatechange = () => {
-            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
-                try {
-                    permissions = JSON.parse(xhr.responseText).rules || [];
-                } catch (e) {}
-            }
-        };
-        xhr.send();
+        _request("GET", "/permissions", undefined, res => permissions = res.rules || []);
     }
 
     function _permissionRequest(method, body) {

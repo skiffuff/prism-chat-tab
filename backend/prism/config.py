@@ -235,22 +235,18 @@ def load_config(keyring_get, keyring_set) -> None:
 
 
 def save_config() -> None:
+    data = {k: v for k, v in rt.config.items() if k != "api_key"}
+    data["provider"] = rt.provider
+    data["model"] = rt.model
     try:
-        os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
-        data = {k: v for k, v in rt.config.items() if k != "api_key"}
-        data["provider"] = rt.provider
-        data["model"] = rt.model
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        os.chmod(CONFIG_FILE, 0o600)
+        write_private(CONFIG_FILE, json.dumps(data, indent=2, ensure_ascii=False))
     except OSError:
         pass
 
 
-def secure_file(path: str) -> None:
-    """Best-effort chmod 0600 for daemon state files."""
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+def write_private(path: str, text: str) -> None:
+    """Write a daemon state file with 0600 perms, creating its directory."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.chmod(path, 0o600)

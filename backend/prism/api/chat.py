@@ -1,5 +1,6 @@
 """/chat and /tool/confirm: the model loop with the confirmed run_bash tool."""
 
+import time
 import threading
 
 from fastapi import APIRouter, Request
@@ -9,7 +10,7 @@ from ..providers.canonical import first_tool_call, result_part, text_of
 from ..screen import clean_response_text, start_recording, user_env, wants_screen
 from ..security import (evaluate, grant_pattern, pending_confirm, pending_lock,
                         rate_limited, redact, register_pending, run_bash, expire_pending)
-from ..sessions import (MAX_TURNS, active_session, find_session, now_ts, record_quota_error,
+from ..sessions import (MAX_TURNS, active_session, find_session, record_quota_error,
                         record_round, save_sessions, set_session_title)
 from ..config import rt
 from .common import authed, bad_request, json_body, reply, unauthorized
@@ -42,7 +43,7 @@ def model_loop(provider: str, model: str, sess: dict) -> dict:
         if err:
             return {"error": err}
         hist.append({"role": "assistant", "parts": parts})
-        sess["updated"] = now_ts()
+        sess["updated"] = time.time()
         save_sessions()
         in_t, out_t = providers.usage_tokens(provider, um)
         record_round(model, provider, in_t, out_t)
@@ -82,7 +83,7 @@ def settle_expired() -> None:
             continue
         sess["messages"].append({"role": "user", "parts": [result_part(
             pend.get("provider") or rt.provider, pend["tool_id"], TIMED_OUT_RESULT)]})
-        sess["updated"] = now_ts()
+        sess["updated"] = time.time()
         print(f"⌛ [TIMEOUT] confirmation for: {redact(pend.get('command', ''))}")
     save_sessions()
     return {"error": {"message": "Request processing iteration count exceeded."}}
@@ -126,7 +127,7 @@ async def chat(request: Request):
             t0 = user_message.strip() or first or "Chat"
             sess["title"] = t0[:48]
             _auto_title(sess["id"], t0)
-        sess["updated"] = now_ts()
+        sess["updated"] = time.time()
         if len(hist) > MAX_TURNS:
             del hist[:len(hist) - MAX_TURNS]
         depth = len(hist)
@@ -187,7 +188,7 @@ async def tool_confirm(request: Request):
                 return reply({"error": "This confirmation expired unanswered; the command was not run."}, 410)
             return reply({"error": "This confirmation was already resolved."}, 409)
         pend["resolved"] = decision
-        pend["resolved_at"] = now_ts()
+        pend["resolved_at"] = time.time()
 
     cmd = pend.get("command", "")
     provider = pend.get("provider") or rt.provider
@@ -206,7 +207,7 @@ async def tool_confirm(request: Request):
                 print(f"📌 [RULE] allow {redact(pattern or '')} for: {redact(cmd)}")
         print(f"🔧 [EXEC]: {redact(cmd)}")
         hist.append({"role": "user", "parts": [result_part(provider, tool_call_id, run_bash(cmd, user_env()))]})
-    sess["updated"] = now_ts()
+    sess["updated"] = time.time()
     save_sessions()
 
     outcome = model_loop(provider, model, sess)
