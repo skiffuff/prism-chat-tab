@@ -53,9 +53,8 @@ SCREEN_TRIGGER_PHRASES = (
 
 GLOW_DEFAULTS = {
     "enabled": True,
-    "ring_count": 96,
-    "sigma": 28,
-    "alpha": 0.42,
+    "sigma": 64,
+    "alpha": 0.8,
     "gradient": None,
 }
 

@@ -133,7 +133,7 @@ bind = SUPER, A, exec, caelestia shell prism toggle
   "worker_url": "",                      // optional Cloudflare worker proxy for Gemini
   "anthropic_url": "",                   // optional proxies; empty = vendor API
   "openai_url": "",
-  "glow": { "enabled": true, "ring_count": 96, "sigma": 28, "alpha": 0.42 }
+  "glow": { "enabled": true, "sigma": 64, "alpha": 0.8 }   // sigma = how far the glow spreads (px)
 }
 ```
 

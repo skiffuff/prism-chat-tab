@@ -57,9 +57,8 @@ Item {
         || sysInput.text !== (root.sd?.system_instruction ?? "")
         || (!root.tab.isGemini && endpointInput.text.trim() !== root.endpointValue)
         || glowToggle.checked !== (root.sd?.glow?.enabled ?? true)
-        || Math.round(ringsSlider.value) !== (root.sd?.glow?.ring_count ?? 96)
-        || Math.round(sigmaSlider.value) !== (root.sd?.glow?.sigma ?? 28)
-        || Math.abs(alphaSlider.value - (root.sd?.glow?.alpha ?? 0.42)) > 0.001
+        || Math.round(sigmaSlider.value) !== (root.sd?.glow?.sigma ?? 64)
+        || Math.abs(alphaSlider.value - (root.sd?.glow?.alpha ?? 0.8)) > 0.001
         || root.gradient.join(",") !== (root.sd?.glow?.gradient ?? []).join(",")
 
     // Save bar message: "" | "saving" | "saved" | error text
@@ -73,9 +72,8 @@ Item {
         endpointInput.text = root.endpointValue;
         sysInput.text = root.sd?.system_instruction ?? "";
         glowToggle.checked = root.sd?.glow?.enabled ?? true;
-        ringsSlider.value = root.sd?.glow?.ring_count ?? 96;
-        sigmaSlider.value = root.sd?.glow?.sigma ?? 28;
-        alphaSlider.value = root.sd?.glow?.alpha ?? 0.42;
+        sigmaSlider.value = root.sd?.glow?.sigma ?? 64;
+        alphaSlider.value = root.sd?.glow?.alpha ?? 0.8;
         root.gradient = (root.sd?.glow?.gradient ?? []).slice();
         validationLabel.text = "";
         removeKey.armed = false;
@@ -89,7 +87,6 @@ Item {
             system_instruction: sysInput.text,
             glow: {
                 enabled: glowToggle.checked,
-                ring_count: Math.round(ringsSlider.value),
                 sigma: Math.round(sigmaSlider.value),
                 alpha: Math.round(alphaSlider.value * 100) / 100,
                 gradient: isDefault ? [] : root.gradient
@@ -625,23 +622,13 @@ Item {
                     Divider {}
 
                     SliderRow {
-                        id: ringsSlider
-
-                        label: qsTr("Rings")
-                        hint: qsTr("how many bands make up the glow")
-                        from: 24
-                        to: 192
-                        stepSize: 8
-                    }
-
-                    SliderRow {
                         id: sigmaSlider
 
-                        label: qsTr("Softness")
-                        hint: qsTr("blur radius of each band")
-                        from: 4
-                        to: 80
-                        stepSize: 2
+                        label: qsTr("Spread")
+                        hint: qsTr("how far the glow reaches into the screen")
+                        from: 16
+                        to: 128
+                        stepSize: 4
                     }
 
                     SliderRow {
@@ -1198,6 +1185,8 @@ Item {
 
             Layout.fillWidth: true
             fgColour: GeminiChat.providerPrimary
+            // StyledSlider only reports a 0..1 position; snap it onto the scale ourselves
+            onInteraction: v => value = from + Math.round(v * (to - from) / stepSize) * stepSize
         }
     }
 }

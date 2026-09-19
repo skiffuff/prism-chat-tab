@@ -18,8 +18,17 @@ MAX_SYSTEM_INSTRUCTION = 20_000
 _HEX_COLOUR = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 
+def _stored_glow() -> dict:
+    glow = dict(rt.config.get("glow") or {})
+    # Ring-era block: sigma/alpha were per-ring values, meaningless now
+    if glow.pop("ring_count", None) is not None:
+        glow.pop("sigma", None)
+        glow.pop("alpha", None)
+    return {**GLOW_DEFAULTS, **glow}
+
+
 def _glow_settings() -> dict:
-    glow = {**GLOW_DEFAULTS, **(rt.config.get("glow") or {})}
+    glow = _stored_glow()
     if not glow.get("gradient"):
         glow["gradient"] = rt.provider_def()["gradient"]
     return glow
@@ -67,7 +76,7 @@ def _validate_glow(glow: dict):
         if not isinstance(glow["enabled"], bool):
             return None, "glow.enabled must be a boolean"
         clean["enabled"] = glow["enabled"]
-    for key, lo, hi in (("ring_count", 8, 512), ("sigma", 1, 200), ("alpha", 0.0, 1.0)):
+    for key, lo, hi in (("sigma", 8, 200), ("alpha", 0.0, 1.0)):
         if key in glow and glow[key] is not None:
             v = glow[key]
             if isinstance(v, bool) or not isinstance(v, (int, float)) or not (lo <= v <= hi):
@@ -150,7 +159,7 @@ async def update_settings(request: Request):
         rt.system_instruction = data["system_instruction"]
         rt.config["system_instruction"] = rt.system_instruction
     if glow_clean is not None:
-        current = {**GLOW_DEFAULTS, **(rt.config.get("glow") or {})}
+        current = _stored_glow()
         current.update(glow_clean)
         # Only a gradient the user actually chose is stored; without one the
         # glow keeps following the active provider's palette.

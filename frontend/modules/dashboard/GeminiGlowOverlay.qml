@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Effects
 import QtQuick.Shapes
 import Quickshell
 import Quickshell.Wayland
@@ -130,80 +131,68 @@ Scope {
                     }
                 }
 
-                // Final state: soft gaussian bloom (60 rings),
-                // shimmering with the official Gemini logo gradient
+                // Final state: one solid frame of the flowing provider
+                // gradient, blurred so it scatters inward as a single soft glow
                 Item {
                     id: bloom
 
                     anchors.fill: parent
-                    opacity: Math.min(1, content.u * 1.5)
+                    opacity: Math.min(1, content.u * 1.5) * (GeminiChat.settingsData?.glow?.alpha ?? 0.8)
 
-                    Repeater {
-                        model: GeminiChat.settingsData?.glow?.ring_count ?? 96
+                    // Solid band width; the blur pushes the glow ~2x further in
+                    readonly property real spread: GeminiChat.settingsData?.glow?.sigma ?? 64
 
-                        delegate: Shape {
-                            id: ring
+                    Shape {
+                        id: frame
 
-                            required property int modelData
+                        anchors.fill: parent
+                        visible: false
+                        preferredRendererType: Shape.GeometryRenderer
+                        asynchronous: false
 
-                            readonly property real inset: modelData
-                            readonly property real thickness: 2.4
-                            readonly property real sigma: GeminiChat.settingsData?.glow?.sigma ?? 28
-                            readonly property real ringAlpha: (GeminiChat.settingsData?.glow?.alpha ?? 0.42) * Math.exp(-Math.pow(modelData, 2) / (2 * ring.sigma * ring.sigma))
+                        ShapePath {
+                            fillRule: ShapePath.OddEvenFill
+                            strokeWidth: 0
+                            strokeColor: "transparent"
 
-                            anchors.fill: parent
-                            opacity: ringAlpha
-                            preferredRendererType: Shape.GeometryRenderer
-                            asynchronous: false
+                            fillGradient: ConicalGradient {
+                                centerX: content.width / 2
+                                centerY: content.height / 2
+                                angle: content.flowAngle
 
-                            readonly property real w: content.width - inset * 2
-                            readonly property real h: content.height - inset * 2
-                            readonly property real r: 2
-                            readonly property real ri: 0.75
-
-                            ShapePath {
-                                fillRule: ShapePath.OddEvenFill
-                                strokeWidth: 0
-                                strokeColor: "transparent"
-
-                                fillGradient: ConicalGradient {
-                                    centerX: content.width / 2
-                                    centerY: content.height / 2
-                                    angle: content.flowAngle
-
-                                    GradientStop { position: 0.0; color: GeminiChat.providerGradient[0] ?? "#4285F4"
-                                        Behavior on color { ColorAnimation { duration: 400; easing.type: Easing.InOutSine } } }
-                                    GradientStop { position: 0.35; color: GeminiChat.providerGradient[1] ?? "#9B72CB"
-                                        Behavior on color { ColorAnimation { duration: 400; easing.type: Easing.InOutSine } } }
-                                    GradientStop { position: 0.7; color: GeminiChat.providerGradient[2] ?? "#D96570"
-                                        Behavior on color { ColorAnimation { duration: 400; easing.type: Easing.InOutSine } } }
-                                    GradientStop { position: 1.0; color: GeminiChat.providerGradient[3] ?? "#4285F4"
-                                        Behavior on color { ColorAnimation { duration: 400; easing.type: Easing.InOutSine } } }
-                                }
-
-                                startX: ring.inset + ring.r
-                                startY: ring.inset
-
-                                PathLine { x: ring.inset + ring.w - ring.r; y: ring.inset }
-                                PathArc { x: ring.inset + ring.w; y: ring.inset + ring.r; radiusX: ring.r; radiusY: ring.r }
-                                PathLine { x: ring.inset + ring.w; y: ring.inset + ring.h - ring.r }
-                                PathArc { x: ring.inset + ring.w - ring.r; y: ring.inset + ring.h; radiusX: ring.r; radiusY: ring.r }
-                                PathLine { x: ring.inset + ring.r; y: ring.inset + ring.h }
-                                PathArc { x: ring.inset; y: ring.inset + ring.h - ring.r; radiusX: ring.r; radiusY: ring.r }
-                                PathLine { x: ring.inset; y: ring.inset + ring.r }
-                                PathArc { x: ring.inset + ring.r; y: ring.inset; radiusX: ring.r; radiusY: ring.r }
-
-                                PathMove { x: ring.inset + ring.thickness + ring.ri; y: ring.inset + ring.thickness }
-                                PathLine { x: ring.inset + ring.w - ring.thickness - ring.ri; y: ring.inset + ring.thickness }
-                                PathArc { x: ring.inset + ring.w - ring.thickness; y: ring.inset + ring.thickness + ring.ri; radiusX: ring.ri; radiusY: ring.ri }
-                                PathLine { x: ring.inset + ring.w - ring.thickness; y: ring.inset + ring.h - ring.thickness - ring.ri }
-                                PathArc { x: ring.inset + ring.w - ring.thickness - ring.ri; y: ring.inset + ring.h - ring.thickness; radiusX: ring.ri; radiusY: ring.ri }
-                                PathLine { x: ring.inset + ring.thickness + ring.ri; y: ring.inset + ring.h - ring.thickness }
-                                PathArc { x: ring.inset + ring.thickness; y: ring.inset + ring.h - ring.thickness - ring.ri; radiusX: ring.ri; radiusY: ring.ri }
-                                PathLine { x: ring.inset + ring.thickness; y: ring.inset + ring.thickness + ring.ri }
-                                PathArc { x: ring.inset + ring.thickness + ring.ri; y: ring.inset + ring.thickness; radiusX: ring.ri; radiusY: ring.ri }
+                                GradientStop { position: 0.0; color: GeminiChat.providerGradient[0] ?? "#4285F4"
+                                    Behavior on color { ColorAnimation { duration: 400; easing.type: Easing.InOutSine } } }
+                                GradientStop { position: 0.35; color: GeminiChat.providerGradient[1] ?? "#9B72CB"
+                                    Behavior on color { ColorAnimation { duration: 400; easing.type: Easing.InOutSine } } }
+                                GradientStop { position: 0.7; color: GeminiChat.providerGradient[2] ?? "#D96570"
+                                    Behavior on color { ColorAnimation { duration: 400; easing.type: Easing.InOutSine } } }
+                                GradientStop { position: 1.0; color: GeminiChat.providerGradient[3] ?? "#4285F4"
+                                    Behavior on color { ColorAnimation { duration: 400; easing.type: Easing.InOutSine } } }
                             }
+
+                            startX: 0
+                            startY: 0
+                            PathLine { x: content.width; y: 0 }
+                            PathLine { x: content.width; y: content.height }
+                            PathLine { x: 0; y: content.height }
+                            PathLine { x: 0; y: 0 }
+
+                            PathMove { x: bloom.spread; y: bloom.spread }
+                            PathLine { x: content.width - bloom.spread; y: bloom.spread }
+                            PathLine { x: content.width - bloom.spread; y: content.height - bloom.spread }
+                            PathLine { x: bloom.spread; y: content.height - bloom.spread }
+                            PathLine { x: bloom.spread; y: bloom.spread }
                         }
+                    }
+
+                    MultiEffect {
+                        anchors.fill: frame
+                        source: frame
+                        autoPaddingEnabled: false
+                        blurEnabled: true
+                        blur: 1
+                        blurMax: 64
+                        blurMultiplier: Math.max(0, bloom.spread / 32 - 1)
                     }
                 }
 
