@@ -170,7 +170,9 @@ Singleton {
 
     function loadHistory() {
         _request("GET", "/history", undefined, res => {
-            if (res.history && res.history.length > 0) {
+            // An empty history must clear too: the session may have been
+            // switched or wiped behind our back (daemon restart, IPC reload)
+            if (res.history) {
                 chatModel.clear();
                 for (let i = 0; i < res.history.length; i++) {
                     const item = res.history[i];
