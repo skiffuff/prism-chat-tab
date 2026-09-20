@@ -122,7 +122,8 @@ async def chat(request: Request):
         sess = active_session()
         hist = sess["messages"]
         hist.append({"role": "user", "parts": attach_parts + ([{"type": "text", "text": user_message}] if user_message else [])})
-        if not sess.get("title"):
+        # "New chat" is the placeholder new_session() starts with, not a title
+        if sess.get("title") in ("", None, "New chat"):
             first = attachments[0].get("filename") if attachments and isinstance(attachments[0], dict) else ""
             t0 = user_message.strip() or first or "Chat"
             sess["title"] = t0[:48]
