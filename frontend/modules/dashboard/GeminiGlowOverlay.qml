@@ -53,26 +53,14 @@ Scope {
                     return !!t?.fullscreen || /cs2|gamescope|steam_app/i.test(c);
                 }
 
-                // Intro sweep progress: 0 = nothing, 1 = heads met at bottom center
+                // Intro sweep progress: the frame draws itself from top center,
+                // both ways round the edges, meeting at bottom center
                 property real u: 1
 
-                // Comet color, shimmering through the active provider palette
-                property color headColor: GeminiChat.providerPrimary
-
-                Behavior on headColor {
-                    // Smooth provider recolour after the intro sweep is over
-                    enabled: content.u >= 1
-
-                    ColorAnimation {
-                        duration: 400
-                        easing.type: Easing.InOutSine
-                    }
-                }
-
-                readonly property real halfLen: height + width / 2
-                readonly property real s: u * halfLen
-                readonly property real wallH: Math.min(s, height)
-                readonly property real botW: Math.min(width / 2, Math.max(0, s - height))
+                readonly property real s: u * (width + height)
+                readonly property real topW: Math.min(width / 2, s)
+                readonly property real wallH: Math.min(height, Math.max(0, s - width / 2))
+                readonly property real botW: Math.min(width / 2, Math.max(0, s - width / 2 - height))
 
                 Behavior on opacity {
                     NumberAnimation {
@@ -100,17 +88,8 @@ Scope {
                     property: "u"
                     from: 0
                     to: 1
-                    duration: 900
+                    duration: 1200
                     easing.type: Easing.OutCubic
-                }
-
-                SequentialAnimation on headColor {
-                    running: content.showGlow && content.u < 1
-                    loops: Animation.Infinite
-
-                    ColorAnimation { to: GeminiChat.providerSecondary; duration: 300 }
-                    ColorAnimation { to: GeminiChat.providerTertiary; duration: 300 }
-                    ColorAnimation { to: GeminiChat.providerPrimary; duration: 300 }
                 }
 
                 Connections {
@@ -131,13 +110,13 @@ Scope {
                     }
                 }
 
-                // Final state: one solid frame of the flowing provider
+                // One solid frame of the flowing provider
                 // gradient, blurred so it scatters inward as a single soft glow
                 Item {
                     id: bloom
 
                     anchors.fill: parent
-                    opacity: Math.min(1, content.u * 1.5) * (GeminiChat.settingsData?.glow?.alpha ?? 0.8)
+                    opacity: (GeminiChat.settingsData?.glow?.alpha ?? 0.8)
 
                     // Solid band width; the blur pushes the glow ~2x further in
                     readonly property real spread: GeminiChat.settingsData?.glow?.sigma ?? 64
@@ -151,7 +130,7 @@ Scope {
                         asynchronous: false
 
                         ShapePath {
-                            fillRule: ShapePath.OddEvenFill
+                            fillRule: ShapePath.WindingFill
                             strokeWidth: 0
                             strokeColor: "transparent"
 
@@ -170,18 +149,13 @@ Scope {
                                     Behavior on color { ColorAnimation { duration: 400; easing.type: Easing.InOutSine } } }
                             }
 
-                            startX: 0
-                            startY: 0
-                            PathLine { x: content.width; y: 0 }
-                            PathLine { x: content.width; y: content.height }
-                            PathLine { x: 0; y: content.height }
-                            PathLine { x: 0; y: 0 }
-
-                            PathMove { x: bloom.spread; y: bloom.spread }
-                            PathLine { x: content.width - bloom.spread; y: bloom.spread }
-                            PathLine { x: content.width - bloom.spread; y: content.height - bloom.spread }
-                            PathLine { x: bloom.spread; y: content.height - bloom.spread }
-                            PathLine { x: bloom.spread; y: bloom.spread }
+                            // The band as the part of each edge revealed so far
+                            PathRectangle { x: content.width / 2 - content.topW; y: 0; width: content.topW; height: bloom.spread }
+                            PathRectangle { x: content.width / 2; y: 0; width: content.topW; height: bloom.spread }
+                            PathRectangle { x: 0; y: 0; width: bloom.spread; height: content.wallH }
+                            PathRectangle { x: content.width - bloom.spread; y: 0; width: bloom.spread; height: content.wallH }
+                            PathRectangle { x: 0; y: content.height - bloom.spread; width: content.botW; height: bloom.spread }
+                            PathRectangle { x: content.width - content.botW; y: content.height - bloom.spread; width: content.botW; height: bloom.spread }
                         }
                     }
 
@@ -193,128 +167,6 @@ Scope {
                         blur: 1
                         blurMax: 64
                         blurMultiplier: Math.max(0, bloom.spread / 32 - 1)
-                    }
-                }
-
-                // Intro comets: bright cores + soft halos, revealed by growing
-                // clip windows so they travel STRICTLY along the screen edges,
-                // through the corners, meeting at bottom center
-                Item {
-                    id: heads
-
-                    anchors.fill: parent
-                    visible: content.u < 1
-                    opacity: content.u < 1 ? 1 : 0
-
-                    Behavior on opacity {
-                        NumberAnimation {
-                            duration: 200
-                            easing.type: Easing.OutCubic
-                        }
-                    }
-
-                    // Right wall segment
-                    CometEdge {
-                        x: content.width - 6
-                        y: 0
-                        width: 6
-                        height: Math.max(0, content.wallH + 2)
-                        headColor: content.headColor
-                        canvasWidth: content.width
-                        canvasHeight: content.height
-                        x1: content.width / 2; y1: 1.5
-                        x2: content.width - 1.5; y2: 1.5
-                        x3: content.width - 1.5; y3: content.height - 1.5
-                    }
-
-                    // Right bottom segment
-                    CometEdge {
-                        x: content.width - content.botW - 2
-                        y: content.height - 6
-                        width: Math.max(0, content.botW + 2)
-                        height: 6
-                        headColor: content.headColor
-                        canvasWidth: content.width
-                        canvasHeight: content.height
-                        x1: content.width - 1.5; y1: content.height - 1.5
-                        x3: content.width / 2; y3: content.height - 1.5
-                    }
-
-                    // Left wall segment
-                    CometEdge {
-                        x: 0
-                        y: 0
-                        width: 6
-                        height: Math.max(0, content.wallH + 2)
-                        headColor: content.headColor
-                        canvasWidth: content.width
-                        canvasHeight: content.height
-                        x1: content.width / 2; y1: 1.5
-                        x2: 1.5; y2: 1.5
-                        x3: 1.5; y3: content.height - 1.5
-                    }
-
-                    // Left bottom segment
-                    CometEdge {
-                        x: 0
-                        y: content.height - 6
-                        width: Math.max(0, content.botW + 2)
-                        height: 6
-                        headColor: content.headColor
-                        canvasWidth: content.width
-                        canvasHeight: content.height
-                        x1: 1.5; y1: content.height - 1.5
-                        x3: content.width / 2; y3: content.height - 1.5
-                    }
-
-                    // One straight-or-cornered comet trail, clipped to its own
-                    // Item rect; x2/y2 default to the start point, so a
-                    // 2-point (bottom) segment just omits the corner.
-                    component CometEdge: Item {
-                        id: edge
-
-                        required property color headColor
-                        required property real canvasWidth
-                        required property real canvasHeight
-                        required property real x1
-                        required property real y1
-                        property real x2: x1
-                        property real y2: y1
-                        required property real x3
-                        required property real y3
-
-                        clip: true
-
-                        Shape {
-                            width: edge.canvasWidth
-                            height: edge.canvasHeight
-                            preferredRendererType: Shape.GeometryRenderer
-                            asynchronous: false
-
-                            ShapePath {
-                                strokeWidth: 9
-                                strokeColor: Qt.rgba(edge.headColor.r, edge.headColor.g, edge.headColor.b, 0.25)
-                                fillColor: "transparent"
-                                capStyle: ShapePath.RoundCap
-
-                                startX: edge.x1
-                                startY: edge.y1
-                                PathLine { x: edge.x2; y: edge.y2 }
-                                PathLine { x: edge.x3; y: edge.y3 }
-                            }
-
-                            ShapePath {
-                                strokeWidth: 3
-                                strokeColor: edge.headColor
-                                fillColor: "transparent"
-                                capStyle: ShapePath.RoundCap
-
-                                startX: edge.x1
-                                startY: edge.y1
-                                PathLine { x: edge.x2; y: edge.y2 }
-                                PathLine { x: edge.x3; y: edge.y3 }
-                            }
-                        }
                     }
                 }
             }
