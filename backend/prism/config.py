@@ -25,6 +25,8 @@ GLOW_FLAG = "/tmp/gemini_glow_active"
 GEMINI_DIRECT_BASE = "https://generativelanguage.googleapis.com"
 ANTHROPIC_DEFAULT_URL = "https://api.anthropic.com"
 OPENAI_DEFAULT_URL = "https://api.openai.com"
+# Ollama runs on the user's own machine and speaks OpenAI's wire format.
+OLLAMA_DEFAULT_URL = "http://127.0.0.1:11434"
 # Upper bound on a chat completion, shared by every provider. Every outbound
 # request needs one: requests defaults to waiting forever.
 CHAT_TIMEOUT = 120
@@ -65,6 +67,7 @@ PROVIDERS = [
         "name": "Gemini",
         "style": "gemini",
         "env": "GEMINI_API_KEY",
+        "needs_key": True,
         "icon": "star",
         "logo": "sparkle",
         "primary": "#4285F4",
@@ -86,6 +89,7 @@ PROVIDERS = [
         "name": "Claude",
         "style": "claude",
         "env": "ANTHROPIC_API_KEY",
+        "needs_key": True,
         "icon": "flare",
         "logo": "claude",
         "primary": "#D97757",
@@ -107,6 +111,7 @@ PROVIDERS = [
         "name": "ChatGPT",
         "style": "chatgpt",
         "env": "OPENAI_API_KEY",
+        "needs_key": True,
         "icon": "hub",
         "logo": "openai",
         # OpenAI green, the sage of the ChatGPT avatar, and a brighter mint
@@ -125,12 +130,36 @@ PROVIDERS = [
             "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini"
         ],
     },
+    {
+        "id": "ollama",
+        "name": "Ollama",
+        "style": "ollama",
+        "env": "OLLAMA_API_KEY",
+        # Local models answer without any key.
+        "needs_key": False,
+        "icon": "home_storage",
+        "logo": "llama",
+        # Ollama's mark is black on white; on a shell that can be either, a
+        # steel scale keeps the monochrome identity and stays readable.
+        "primary": "#A3ABBA",
+        "secondary": "#6F7788",
+        "tertiary": "#D4DAE4",
+        "bubble": "#4E5666",
+        "gradient": ["#A3ABBA", "#6F7788", "#D4DAE4", "#A3ABBA"],
+        "greeting": "Hi, I'm Ollama",
+        "key_placeholder": "not needed",
+        "help": "Local models served by Ollama - no API key, nothing leaves the machine",
+        # There is no fixed catalogue: whatever `ollama list` shows is the
+        # model list, and the first one is used until another is picked.
+        "default_model": "",
+        "default_models": [],
+    },
 ]
 
 # Fields of a provider entry that are safe to hand to clients.
 PROVIDER_PUBLIC_FIELDS = (
     "id", "name", "style", "icon", "logo", "primary", "secondary", "tertiary",
-    "bubble", "gradient", "greeting", "key_placeholder", "help",
+    "bubble", "gradient", "greeting", "key_placeholder", "help", "needs_key",
 )
 
 
@@ -159,6 +188,7 @@ class Runtime:
     worker_url: str = os.environ.get("PRISM_WORKER_URL", "")
     anthropic_url: str = ANTHROPIC_DEFAULT_URL
     openai_url: str = OPENAI_DEFAULT_URL
+    ollama_url: str = OLLAMA_DEFAULT_URL
     system_instruction: str = DEFAULT_SYSTEM_INSTRUCTION
     # Raw contents of config.json (minus secrets)
     config: dict = field(default_factory=dict)
@@ -175,6 +205,11 @@ class Runtime:
         if k:
             return k
         return os.environ.get(provider_env(self.provider), "") or ""
+
+    def openai_base(self) -> str:
+        """Base URL for the OpenAI wire format: Ollama's own endpoint when it
+        is the active provider, ChatGPT's otherwise."""
+        return self.ollama_url if self.provider == "ollama" else self.openai_url
 
     def gemini_base(self) -> str:
         """Base URL for Gemini requests: worker proxy if set, otherwise Google."""
@@ -228,6 +263,8 @@ def load_config(keyring_get, keyring_set) -> None:
         rt.anthropic_url = str(cfg["anthropic_url"])
     if cfg.get("openai_url"):
         rt.openai_url = str(cfg["openai_url"])
+    if cfg.get("ollama_url"):
+        rt.ollama_url = str(cfg["ollama_url"]).rstrip("/")
     if cfg.get("system_instruction"):
         rt.system_instruction = str(cfg["system_instruction"])
     rt.model = cfg.get("model") or rt.provider_def()["default_model"]

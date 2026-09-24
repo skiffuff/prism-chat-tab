@@ -10,8 +10,11 @@ StyledRect {
 
     required property var tab
 
-    readonly property bool noKey: GeminiChat.providerInfo?.has_key === false
+    // A local provider (Ollama) needs no key and has no quota to run out of
+    readonly property bool isLocal: GeminiChat.providerInfo?.needs_key === false
+    readonly property bool noKey: !isLocal && GeminiChat.providerInfo?.has_key === false
     readonly property bool exhausted: GeminiChat.quotaData?.quota_exceeded ?? false
+    readonly property var modelKeys: root.noKey ? [] : Object.keys(GeminiChat.quotaData?.by_model ?? {})
     readonly property color statusColour: noKey ? "#94a3b8" : (exhausted ? "#f38ba8" : "#a6e3a1")
 
     function usageLine(stats): string {
@@ -52,7 +55,9 @@ StyledRect {
             StyledText {
                 text: root.noKey
                     ? qsTr("%1 API key not found").arg(GeminiChat.providerName)
-                    : (root.exhausted ? qsTr("API quota exhausted") : qsTr("API quota available"))
+                    : root.isLocal
+                        ? qsTr("Local models — no quota")
+                        : (root.exhausted ? qsTr("API quota exhausted") : qsTr("API quota available"))
                 font: Tokens.font.body.builders.medium.weight(Font.Medium).build()
                 color: root.statusColour
                 Layout.fillWidth: true
@@ -70,6 +75,7 @@ StyledRect {
 
         Rectangle {
             Layout.fillWidth: true
+            visible: root.modelKeys.length > 0
             height: 1
             color: Colours.palette.m3outlineVariant
             opacity: 0.4
@@ -77,14 +83,14 @@ StyledRect {
 
         // ── Per-model status ──────────────────────────
         StyledText {
-            visible: !root.noKey
+            visible: root.modelKeys.length > 0
             text: qsTr("Model limits")
             font: Tokens.font.body.small
             color: Colours.palette.m3outline
         }
 
         Repeater {
-            model: root.noKey ? [] : Object.keys(GeminiChat.quotaData?.by_model ?? {})
+            model: root.modelKeys
 
             delegate: RowLayout {
                 id: modelRow

@@ -4,9 +4,9 @@ completions, routed by provider id."""
 import re
 
 from ..config import rt
-from . import anthropic, gemini, openai
+from . import anthropic, gemini, ollama, openai
 
-_BACKENDS = {"gemini": gemini, "anthropic": anthropic, "openai": openai}
+_BACKENDS = {"gemini": gemini, "anthropic": anthropic, "openai": openai, "ollama": ollama}
 
 
 def backend(provider: str = None):
@@ -19,6 +19,13 @@ def call_model(provider: str, messages):
     Returns (parts, error, usage_metadata); parts is None on error.
     """
     return backend(provider).call(messages)
+
+
+def resolve_model(provider: str, model: str) -> str:
+    """Let a backend correct a stored model name (Ollama's catalogue is
+    whatever is pulled locally); providers with a fixed one keep it."""
+    fn = getattr(backend(provider), "resolve_model", None)
+    return fn(model) if fn else model
 
 
 def usage_tokens(provider: str, um) -> tuple:

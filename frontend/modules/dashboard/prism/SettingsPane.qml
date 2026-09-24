@@ -31,11 +31,16 @@ Item {
         { icon: "verified_user", label: qsTr("Permissions") }
     ]
 
+    // A provider that runs locally authenticates with nothing
+    readonly property bool needsKey: GeminiChat.providerInfo?.needs_key !== false
+
     readonly property string endpointDefault: {
         if (root.tab.isClaude)
             return "https://api.anthropic.com";
         if (root.tab.isChatGPT)
             return "https://api.openai.com";
+        if (root.tab.isOllama)
+            return "http://127.0.0.1:11434";
         return "";
     }
 
@@ -44,6 +49,8 @@ Item {
             return root.sd?.anthropic_url ?? root.endpointDefault;
         if (root.tab.isChatGPT)
             return root.sd?.openai_url ?? root.endpointDefault;
+        if (root.tab.isOllama)
+            return root.sd?.ollama_url ?? root.endpointDefault;
         return root.sd?.worker_url ?? "";
     }
 
@@ -98,6 +105,8 @@ Item {
             payload.anthropic_url = endpointInput.text.trim();
         else if (root.tab.isChatGPT)
             payload.openai_url = endpointInput.text.trim();
+        else if (root.tab.isOllama)
+            payload.ollama_url = endpointInput.text.trim();
         // Only touch the keyring when a key was typed; an empty field never
         // wipes the stored one (that is what "Remove key" is for).
         if (keyInput.text.trim().length > 0)
@@ -348,11 +357,13 @@ Item {
                             width: 8
                             height: 8
                             radius: 4
-                            color: root.sd?.api_key_set ? root.ok : Colours.palette.m3outline
+                            color: (!root.needsKey || root.sd?.api_key_set) ? root.ok : Colours.palette.m3outline
                         }
 
                         StyledText {
                             text: {
+                                if (!root.needsKey)
+                                    return qsTr("No key needed — the models run on this machine");
                                 if (!root.sd?.api_key_set)
                                     return qsTr("No key stored — %1 will not answer until one is set").arg(root.tab.providerLabel);
                                 switch (root.sd?.api_key_source) {
@@ -370,6 +381,7 @@ Item {
                     }
 
                     FieldLabel {
+                        visible: root.needsKey
                         text: root.sd?.api_key_set ? qsTr("Replace API key") : qsTr("API key")
                     }
 
@@ -379,6 +391,7 @@ Item {
 
                         Field {
                             Layout.fillWidth: true
+                            visible: root.needsKey
                             focused: keyInput.activeFocus
 
                             TextInput {
@@ -405,14 +418,18 @@ Item {
                         }
 
                         IconChip {
+                            visible: root.needsKey
                             icon: keyInput.echoMode === TextInput.Password ? "visibility" : "visibility_off"
                             tip: keyInput.echoMode === TextInput.Password ? qsTr("Show") : qsTr("Hide")
                             onClicked: keyInput.echoMode = keyInput.echoMode === TextInput.Password ? TextInput.Normal : TextInput.Password
                         }
 
                         SmallButton {
-                            label: qsTr("Test")
-                            enabled: keyInput.text.trim().length > 0
+                            // Nothing to type for a local provider: the test
+                            // just asks whether its server answers.
+                            Layout.alignment: root.needsKey ? Qt.AlignVCenter : Qt.AlignLeft
+                            label: root.needsKey ? qsTr("Test") : qsTr("Test connection")
+                            enabled: !root.needsKey || keyInput.text.trim().length > 0
                             onClicked: {
                                 validationLabel.text = qsTr("Checking…");
                                 validationLabel.color = Colours.palette.m3onSurfaceVariant;
@@ -438,7 +455,7 @@ Item {
 
                         property bool armed: false
 
-                        visible: !!root.sd?.api_key_set
+                        visible: root.needsKey && !!root.sd?.api_key_set
                         label: armed ? qsTr("Click again to remove the stored key") : qsTr("Remove stored key")
                         borderColour: armed ? root.bad : Qt.alpha(Colours.palette.m3outlineVariant, 0.8)
                         labelColour: armed ? root.bad : Colours.palette.m3onSurface
@@ -464,7 +481,7 @@ Item {
                     Divider {}
 
                     FieldLabel {
-                        text: root.tab.isGemini ? qsTr("Worker URL") : qsTr("API endpoint")
+                        text: root.tab.isGemini ? qsTr("Worker URL") : root.tab.isOllama ? qsTr("Ollama endpoint") : qsTr("API endpoint")
                     }
 
                     RowLayout {
@@ -492,7 +509,7 @@ Item {
                                 StyledText {
                                     anchors.verticalCenter: parent.verticalCenter
                                     visible: !endpointInput.text && !endpointInput.activeFocus
-                                    text: root.tab.isGemini ? qsTr("not set — Google is called directly") : "https://…"
+                                    text: root.tab.isGemini ? qsTr("not set — Google is called directly") : root.tab.isOllama ? "http://127.0.0.1:11434" : "https://…"
                                     font: Tokens.font.body.medium
                                     color: Colours.palette.m3outline
                                 }
@@ -511,7 +528,9 @@ Item {
                         Layout.fillWidth: true
                         text: root.tab.isGemini
                             ? qsTr("An optional Cloudflare worker that proxies Gemini. It is read from ~/.config/prism/config.json at daemon start and cannot be changed here.")
-                            : qsTr("Only the vendor's own https host is accepted here; a proxy for a blocked region goes into ~/.config/prism/config.json.")
+                            : root.tab.isOllama
+                                ? qsTr("Where the local Ollama server listens. Only a loopback address is accepted here; a server on another machine goes into ~/.config/prism/config.json.")
+                                : qsTr("Only the vendor's own https host is accepted here; a proxy for a blocked region goes into ~/.config/prism/config.json.")
                         font: Tokens.font.body.small
                         color: Colours.palette.m3onSurfaceVariant
                         wrapMode: Text.Wrap

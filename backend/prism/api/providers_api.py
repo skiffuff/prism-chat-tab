@@ -33,7 +33,7 @@ async def set_provider(request: Request):
     if not isinstance(pid, str) or provider_by_id(pid) is None:
         return bad_request("invalid")
     rt.provider = pid
-    rt.model = rt.config.get(f"model_{pid}") or rt.provider_def()["default_model"]
+    rt.model = providers.resolve_model(pid, rt.config.get(f"model_{pid}") or rt.provider_def()["default_model"])
     rt.config["provider"] = pid
     save_config()
     return reply({"ok": True, "provider": rt.provider, "model": rt.model})

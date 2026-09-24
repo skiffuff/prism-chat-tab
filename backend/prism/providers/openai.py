@@ -81,7 +81,7 @@ def payload(messages, max_tokens: int, tools=None) -> dict:
 
 
 def _post(body: dict, timeout: int):
-    return requests.post(f"{rt.openai_url}/v1/chat/completions", json=body, headers=headers(), timeout=timeout)
+    return requests.post(f"{rt.openai_base()}/v1/chat/completions", json=body, headers=headers(), timeout=timeout)
 
 
 def repair_tool_pairs(msgs: list) -> list:
@@ -169,7 +169,7 @@ def _message_text(msg: dict) -> str:
 
 def call(messages):
     """One chat round. Returns (blocks, error, usage)."""
-    if not rt.api_key():
+    if not rt.api_key() and rt.provider_def().get("needs_key", True):
         return None, {"message": "OpenAI API key is not set. Add it in the chat settings."}, {}
     body = payload(build_messages(messages), 10000, tools=TOOLS)
     try:
@@ -231,7 +231,7 @@ def describe_frame(frame_b64: str, prompt: str, timeout: int = 60) -> str:
 
 
 def list_models(timeout: int = 5) -> list:
-    res = requests.get(f"{rt.openai_url}/v1/models", headers=headers(), timeout=timeout)
+    res = requests.get(f"{rt.openai_base()}/v1/models", headers=headers(), timeout=timeout)
     if res.status_code != 200:
         return []
     ids = sorted(m.get("id", "") for m in res.json().get("data", []))
@@ -241,7 +241,7 @@ def list_models(timeout: int = 5) -> list:
 def validate_key(key: str) -> dict:
     if not (isinstance(key, str) and key.strip().startswith("sk-")):
         return {"valid": False, "error": "Invalid OpenAI API key format"}
-    r = requests.get(f"{rt.openai_url}/v1/models", headers=headers(key.strip()), timeout=10)
+    r = requests.get(f"{rt.openai_base()}/v1/models", headers=headers(key.strip()), timeout=10)
     if r.status_code == 200:
         n = sum(1 for m in r.json().get("data", []) if is_chat_model(m.get("id", "")))
         return {"valid": True, "models": n}

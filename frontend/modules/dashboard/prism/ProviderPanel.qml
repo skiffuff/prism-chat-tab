@@ -33,6 +33,8 @@ StyledRect {
             required property var modelData
 
             readonly property bool provActive: GeminiChat.currentProvider === modelData.id
+            // A local provider (Ollama) has nothing to authenticate against
+            readonly property bool provLocal: modelData.needs_key === false
 
             width: providerList.width
             implicitHeight: 38
@@ -69,11 +71,11 @@ StyledRect {
                     width: 8
                     height: 8
                     radius: 4
-                    color: provDelegate.modelData.has_key ? "#a6e3a1" : "#f9e2af"
+                    color: (provDelegate.provLocal || provDelegate.modelData.has_key) ? "#a6e3a1" : "#f9e2af"
                 }
 
                 StyledText {
-                    text: provDelegate.modelData.has_key ? qsTr("key set") : qsTr("no key")
+                    text: provDelegate.provLocal ? qsTr("local") : provDelegate.modelData.has_key ? qsTr("key set") : qsTr("no key")
                     font: Tokens.font.body.small
                     color: Colours.palette.m3onSurfaceVariant
                 }

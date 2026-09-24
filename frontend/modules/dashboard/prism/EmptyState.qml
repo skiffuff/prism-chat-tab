@@ -9,7 +9,7 @@ import qs.modules.dashboard
 // Welcome screen shown while the conversation is empty. Each provider gets
 // the feel of its own web app: Gemini a shimmering gradient greeting, ChatGPT
 // a plain question with a list of starters, Claude a serif greeting with its
-// mark inline and a row of chips.
+// mark inline and a row of chips, Ollama nothing but its llama in a disc.
 ColumnLayout {
     id: root
 
@@ -103,11 +103,30 @@ ColumnLayout {
         }
     }
 
+    // ── Ollama: just the llama in a disc, like its desktop app ──
+    Rectangle {
+        Layout.alignment: Qt.AlignHCenter
+        visible: root.tab.isOllama
+        implicitWidth: 72
+        implicitHeight: 72
+        radius: width / 2
+        color: root.tab.gBlue
+
+        GeminiLogo {
+            anchors.centerIn: parent
+            implicitWidth: 46
+            implicitHeight: 46
+            shape: "llama"
+            color: Colours.palette.m3surface
+        }
+    }
+
     // ── Greeting ────────────────────────────────────────────────
     Item {
         id: greetLabel
 
         Layout.alignment: Qt.AlignHCenter
+        visible: !root.tab.isOllama
         implicitWidth: greetRow.implicitWidth
         implicitHeight: greetRow.implicitHeight
 
@@ -129,7 +148,7 @@ ColumnLayout {
                 anchors.verticalCenter: parent.verticalCenter
                 implicitWidth: 30
                 implicitHeight: 30
-                shape: "claude"
+                shape: root.tab.providerShape
                 color: root.tab.gBlue
                 tint: root.tab.gBlue
                 tintAmount: 1
@@ -171,7 +190,7 @@ ColumnLayout {
                 }
             }
 
-            // ChatGPT (system sans) and Claude (serif): plain text
+            // ChatGPT (system sans), Claude (serif)
             StyledText {
                 visible: !root.tab.isGemini
                 anchors.verticalCenter: parent.verticalCenter

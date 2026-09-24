@@ -24,10 +24,11 @@ Item {
     readonly property string providerStyle: GeminiChat.providerInfo?.style ?? "gemini"
     readonly property bool isClaude: providerStyle === "claude"
     readonly property bool isChatGPT: providerStyle === "chatgpt"
-    readonly property bool isGemini: !isClaude && !isChatGPT
-    // Claude's composer is a box with the send button in the corner; Gemini
-    // and ChatGPT both use a pill.
-    readonly property bool boxedInput: isClaude
+    readonly property bool isOllama: providerStyle === "ollama"
+    readonly property bool isGemini: !isClaude && !isChatGPT && !isOllama
+    // Claude's and Ollama's composers are boxes with the send button in the
+    // corner; Gemini and ChatGPT both use a pill.
+    readonly property bool boxedInput: isClaude || isOllama
     // The permission panel docks onto the composer and borrows its look
     readonly property color composerColour: boxedInput ? composerBox.color : composerPill.color
     readonly property int composerRadius: boxedInput ? composerBox.radius : composerPill.radius

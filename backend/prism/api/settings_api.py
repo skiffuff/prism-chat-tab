@@ -47,6 +47,7 @@ async def get_settings(request: Request):
         "worker_url": rt.worker_url,
         "anthropic_url": rt.anthropic_url,
         "openai_url": rt.openai_url,
+        "ollama_url": rt.ollama_url,
         "system_instruction": rt.system_instruction,
         "system_instruction_default": DEFAULT_SYSTEM_INSTRUCTION,
         "glow": _glow_settings(),
@@ -65,6 +66,20 @@ def valid_https_url(url: str, allowed_host: str) -> bool:
         if p.hostname and p.hostname.endswith("."):
             return False
         return p.scheme == "https" and (p.hostname or "").lower() == allowed_host and bool(p.netloc)
+    except ValueError:
+        return False
+
+
+# Where a local Ollama may live. Anything further (a box on the LAN) goes
+# into config.json by hand, like the proxies for the cloud providers.
+LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def valid_local_url(url: str) -> bool:
+    """True when url is an http(s) URL on the loopback interface."""
+    try:
+        p = urlparse(url)
+        return p.scheme in ("http", "https") and (p.hostname or "").lower() in LOOPBACK_HOSTS
     except ValueError:
         return False
 
@@ -124,6 +139,11 @@ async def update_settings(request: Request):
             if new_url and new_url != current and not valid_https_url(new_url, host):
                 return bad_request(f"{field} must be an https URL on {host}")
 
+    if "ollama_url" in data:
+        new_url = text("ollama_url")
+        if new_url and new_url.rstrip("/") != rt.ollama_url and not valid_local_url(new_url):
+            return bad_request("ollama_url must be an http URL on localhost")
+
     if "system_instruction" in data and data["system_instruction"] is not None:
         if not isinstance(data["system_instruction"], str):
             return bad_request("system_instruction must be a string")
@@ -155,6 +175,9 @@ async def update_settings(request: Request):
     if text("openai_url"):
         rt.openai_url = text("openai_url")
         rt.config["openai_url"] = rt.openai_url
+    if text("ollama_url"):
+        rt.ollama_url = text("ollama_url").rstrip("/")
+        rt.config["ollama_url"] = rt.ollama_url
     if isinstance(data.get("system_instruction"), str):
         rt.system_instruction = data["system_instruction"]
         rt.config["system_instruction"] = rt.system_instruction

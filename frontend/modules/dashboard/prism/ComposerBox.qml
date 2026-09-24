@@ -4,8 +4,9 @@ import Caelestia.Config
 import qs.components
 import qs.services
 
-// Claude-style composer: a warm paper box, the prompt on top, a toolbar row
-// underneath with attach on the left and model + send on the right.
+// Boxed composer (Claude, Ollama): the prompt on top, a toolbar row
+// underneath with attach on the left and model + send on the right. Claude
+// gets its warm paper tint, Ollama the plain container of its desktop app.
 StyledRect {
     id: root
 
@@ -14,8 +15,11 @@ StyledRect {
     readonly property alias field: input
     readonly property bool ready: input.text.trim().length > 0 || GeminiChat.attachments.length > 0
 
-    // "claude-sonnet-4-5" -> "Sonnet 4.5", "claude-3-5-haiku" -> "3.5 Haiku"
+    // "claude-sonnet-4-5" -> "Sonnet 4.5", "claude-3-5-haiku" -> "3.5 Haiku";
+    // Ollama tags ("gemma3:12b") are shown as-is, like its own model picker.
     readonly property string modelLabel: {
+        if (root.tab.isOllama)
+            return GeminiChat.currentModel;
         const parts = GeminiChat.currentModel.replace(/^claude-/, "").split("-");
         const out = [];
         for (let i = 0; i < parts.length; i++) {
@@ -34,7 +38,7 @@ StyledRect {
     radius: 20
     topLeftRadius: root.tab.confirmOpen ? 0 : radius
     topRightRadius: root.tab.confirmOpen ? 0 : radius
-    color: Colours.light
+    color: root.tab.isOllama ? Colours.tPalette.m3surfaceContainerHigh : Colours.light
         ? root.tab.mixColour(Colours.palette.m3surface, "#F7EFE5", 0.85)
         : root.tab.mixColour(Colours.palette.m3surface, "#3A3128", 0.55)
     border.width: 1
@@ -73,7 +77,7 @@ StyledRect {
 
             Layout.fillWidth: true
             Layout.fillHeight: true
-            placeholder: qsTr("How can I help you today?")
+            placeholder: root.tab.isOllama ? qsTr("Send a message") : qsTr("How can I help you today?")
         }
 
         RowLayout {
