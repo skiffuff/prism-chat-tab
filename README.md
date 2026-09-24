@@ -2,7 +2,7 @@
   <img src="assets/logo/prism-holo-sticker.png" width="220" alt="Prism">
 </p>
 
-<h3 align="center">Gemini, Claude and ChatGPT as a tab in your desktop shell</h3>
+<h3 align="center">Gemini, Claude, ChatGPT and Ollama as a tab in your desktop shell</h3>
 
 <p align="center">
   A chat tab for the <a href="https://github.com/caelestia-dots/shell">Caelestia</a> shell (Hyprland · quickshell), backed by a small local daemon.<br>
@@ -13,7 +13,7 @@
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-8C5A3F?style=flat-square"></a>
   <img alt="Caelestia shell" src="https://img.shields.io/badge/shell-Caelestia%20%C2%B7%20quickshell-4285F4?style=flat-square">
   <img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12%2B-10A37F?style=flat-square">
-  <img alt="Providers" src="https://img.shields.io/badge/providers-Gemini%20%C2%B7%20Claude%20%C2%B7%20ChatGPT-D97757?style=flat-square">
+  <img alt="Providers" src="https://img.shields.io/badge/providers-Gemini%20%C2%B7%20Claude%20%C2%B7%20ChatGPT%20%C2%B7%20Ollama-D97757?style=flat-square">
 </p>
 
 <p align="center">
@@ -22,16 +22,19 @@
 
 <br>
 
-## Three providers, three looks
+## Four providers, four looks
 
 The tab does not just swap a logo. Greeting, typography, composer, accent colours and the glow that
 frames the screen all follow the active provider, so each one feels like its own web app.
 
 <table>
   <tr>
-    <td align="center" width="33%"><img src="assets/previews/closeup/desktop-gemini-closeup.gif" alt="Gemini"><br><sub><b>Gemini</b> · gradient greeting, blue glow, pill composer</sub></td>
-    <td align="center" width="33%"><img src="assets/previews/closeup/desktop-claude-closeup.gif" alt="Claude"><br><sub><b>Claude</b> · serif greeting, chips, boxed composer</sub></td>
-    <td align="center" width="33%"><img src="assets/previews/closeup/desktop-chatgpt-closeup.gif" alt="ChatGPT"><br><sub><b>ChatGPT</b> · plain greeting, starter list, neutral pill</sub></td>
+    <td align="center" width="50%"><img src="assets/previews/closeup/desktop-gemini-closeup.gif" alt="Gemini"><br><sub><b>Gemini</b> · gradient greeting, blue glow, pill composer</sub></td>
+    <td align="center" width="50%"><img src="assets/previews/closeup/desktop-claude-closeup.gif" alt="Claude"><br><sub><b>Claude</b> · serif greeting, chips, boxed composer</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="50%"><img src="assets/previews/closeup/desktop-chatgpt-closeup.gif" alt="ChatGPT"><br><sub><b>ChatGPT</b> · plain greeting, starter list, neutral pill</sub></td>
+    <td align="center" width="50%"><img src="assets/previews/closeup/desktop-ollama-closeup.gif" alt="Ollama"><br><sub><b>Ollama</b> · llama avatar, steel palette, boxed composer, runs locally</sub></td>
   </tr>
 </table>
 
@@ -82,7 +85,7 @@ shell (`/etc/xdg/quickshell/caelestia`) is first copied to `~/.config/quickshell
 quickshell prefers. Then give the daemon a key and start it:
 
 ```bash
-export GEMINI_API_KEY=...            # or ANTHROPIC_API_KEY / OPENAI_API_KEY
+export GEMINI_API_KEY=...            # or ANTHROPIC_API_KEY / OPENAI_API_KEY; Ollama needs none
 systemctl --user enable --now prism-daemon
 ```
 
@@ -127,12 +130,13 @@ bind = SUPER, A, exec, caelestia shell prism toggle
 
 ```jsonc
 {
-  "provider": "gemini",                  // gemini | anthropic | openai
+  "provider": "gemini",                  // gemini | anthropic | openai | ollama
   "model": "gemini-3.6-flash",
   "system_instruction": "You are a helpful assistant…",
   "worker_url": "",                      // optional Cloudflare worker proxy for Gemini
   "anthropic_url": "",                   // optional proxies; empty = vendor API
   "openai_url": "",
+  "ollama_url": "http://127.0.0.1:11434", // local Ollama server
   "glow": { "enabled": true, "sigma": 64, "alpha": 0.8 }   // sigma = how far the glow spreads (px)
 }
 ```
@@ -174,7 +178,7 @@ scripts/shell-patch.py         wires the tab into a stock shell tree (apply / re
 backend/                       FastAPI daemon, 127.0.0.1:5000
   prism/config.py                   paths, provider registry, config.json
   prism/security.py                 token, rate limit, file policy, run_bash sandbox, rules
-  prism/providers/                  gemini · anthropic · openai behind one canonical message format
+  prism/providers/                  gemini · anthropic · openai · ollama behind one canonical message format
   prism/api/                        chat, providers, sessions, files, settings, watch
 ```
 
