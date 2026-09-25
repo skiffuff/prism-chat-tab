@@ -87,11 +87,12 @@ def valid_local_url(url: str) -> bool:
 def _validate_glow(glow: dict):
     """Type- and range-check the glow block; returns (clean, error)."""
     clean = {}
-    if "enabled" in glow and glow["enabled"] is not None:
-        if not isinstance(glow["enabled"], bool):
-            return None, "glow.enabled must be a boolean"
-        clean["enabled"] = glow["enabled"]
-    for key, lo, hi in (("sigma", 8, 200), ("alpha", 0.0, 1.0)):
+    for key in ("enabled", "sweep"):
+        if key in glow and glow[key] is not None:
+            if not isinstance(glow[key], bool):
+                return None, f"glow.{key} must be a boolean"
+            clean[key] = glow[key]
+    for key, lo, hi in (("sigma", 8, 200), ("alpha", 0.0, 1.0), ("sweep_ms", 300, 3000)):
         if key in glow and glow[key] is not None:
             v = glow[key]
             if isinstance(v, bool) or not isinstance(v, (int, float)) or not (lo <= v <= hi):

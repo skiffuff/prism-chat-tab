@@ -58,6 +58,9 @@ GLOW_DEFAULTS = {
     "sigma": 64,
     "alpha": 0.8,
     "gradient": None,
+    # Intro where the frame draws itself in round the screen edges
+    "sweep": False,
+    "sweep_ms": 1200,
 }
 
 # ── Provider registry ───────────────────────────────────────────────────

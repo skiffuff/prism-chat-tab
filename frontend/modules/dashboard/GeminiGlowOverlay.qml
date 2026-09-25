@@ -54,8 +54,16 @@ Scope {
                 }
 
                 // Intro sweep progress: the frame draws itself from top center,
-                // both ways round the edges, meeting at bottom center
+                // both ways round the edges, meeting at bottom center (opt-in)
                 property real u: 1
+                readonly property bool sweepEnabled: GeminiChat.settingsData?.glow?.sweep ?? false
+
+                function startSweep(): void {
+                    if (!GeminiGlow.active || !content.sweepEnabled)
+                        return;
+                    content.u = 0;
+                    sweepAnim.restart();
+                }
 
                 readonly property real s: u * (width + height)
                 readonly property real topW: Math.min(width / 2, s)
@@ -88,7 +96,7 @@ Scope {
                     property: "u"
                     from: 0
                     to: 1
-                    duration: 1200
+                    duration: GeminiChat.settingsData?.glow?.sweep_ms ?? 1200
                     easing.type: Easing.OutCubic
                 }
 
@@ -96,19 +104,11 @@ Scope {
                     target: GeminiGlow
 
                     function onActiveChanged() {
-                        if (GeminiGlow.active) {
-                            content.u = 0;
-                            sweepAnim.restart();
-                        }
+                        content.startSweep();
                     }
                 }
 
-                Component.onCompleted: {
-                    if (GeminiGlow.active) {
-                        content.u = 0;
-                        sweepAnim.restart();
-                    }
-                }
+                Component.onCompleted: content.startSweep()
 
                 // One solid frame of the flowing provider
                 // gradient, blurred so it scatters inward as a single soft glow

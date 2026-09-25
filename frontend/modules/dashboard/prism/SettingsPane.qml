@@ -66,6 +66,8 @@ Item {
         || glowToggle.checked !== (root.sd?.glow?.enabled ?? true)
         || Math.round(sigmaSlider.value) !== (root.sd?.glow?.sigma ?? 64)
         || Math.abs(alphaSlider.value - (root.sd?.glow?.alpha ?? 0.8)) > 0.001
+        || sweepToggle.checked !== (root.sd?.glow?.sweep ?? false)
+        || Math.round(sweepSlider.value) !== (root.sd?.glow?.sweep_ms ?? 1200)
         || root.gradient.join(",") !== (root.sd?.glow?.gradient ?? []).join(",")
 
     // Save bar message: "" | "saving" | "saved" | error text
@@ -81,6 +83,8 @@ Item {
         glowToggle.checked = root.sd?.glow?.enabled ?? true;
         sigmaSlider.value = root.sd?.glow?.sigma ?? 64;
         alphaSlider.value = root.sd?.glow?.alpha ?? 0.8;
+        sweepToggle.checked = root.sd?.glow?.sweep ?? false;
+        sweepSlider.value = root.sd?.glow?.sweep_ms ?? 1200;
         root.gradient = (root.sd?.glow?.gradient ?? []).slice();
         validationLabel.text = "";
         removeKey.armed = false;
@@ -96,6 +100,8 @@ Item {
                 enabled: glowToggle.checked,
                 sigma: Math.round(sigmaSlider.value),
                 alpha: Math.round(alphaSlider.value * 100) / 100,
+                sweep: sweepToggle.checked,
+                sweep_ms: Math.round(sweepSlider.value),
                 gradient: isDefault ? [] : root.gradient
             }
         };
@@ -658,6 +664,46 @@ Item {
                         to: 1.0
                         stepSize: 0.05
                         decimals: 2
+                    }
+
+                    Divider {}
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Tokens.spacing.medium
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 2
+
+                            StyledText {
+                                text: qsTr("Intro sweep")
+                                font: Tokens.font.body.builders.medium.weight(Font.Medium).build()
+                                color: Colours.palette.m3onSurface
+                            }
+
+                            StyledText {
+                                text: sweepToggle.checked ? qsTr("The frame draws itself in round the edges") : qsTr("Off, the frame just fades in")
+                                font: Tokens.font.body.small
+                                color: Colours.palette.m3onSurfaceVariant
+                            }
+                        }
+
+                        StyledSwitch {
+                            id: sweepToggle
+                        }
+                    }
+
+                    SliderRow {
+                        id: sweepSlider
+
+                        enabled: sweepToggle.checked
+                        opacity: enabled ? 1 : 0.5
+                        label: qsTr("Sweep duration")
+                        hint: qsTr("ms")
+                        from: 300
+                        to: 3000
+                        stepSize: 100
                     }
 
                     Divider {}
