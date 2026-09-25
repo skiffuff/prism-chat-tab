@@ -29,12 +29,12 @@ frames the screen all follow the active provider, so each one feels like its own
 
 <table>
   <tr>
-    <td align="center" width="50%"><img src="assets/previews/closeup/desktop-gemini-closeup.gif" alt="Gemini"><br><sub><b>Gemini</b> · gradient greeting, blue glow, pill composer</sub></td>
-    <td align="center" width="50%"><img src="assets/previews/closeup/desktop-claude-closeup.gif" alt="Claude"><br><sub><b>Claude</b> · serif greeting, chips, boxed composer</sub></td>
+    <td align="center" width="50%"><img src="assets/previews/closeup/desktop-gemini-closeup.webp" alt="Gemini"><br><sub><b>Gemini</b> · gradient greeting, blue glow, pill composer</sub></td>
+    <td align="center" width="50%"><img src="assets/previews/closeup/desktop-claude-closeup.webp" alt="Claude"><br><sub><b>Claude</b> · serif greeting, chips, boxed composer</sub></td>
   </tr>
   <tr>
-    <td align="center" width="50%"><img src="assets/previews/closeup/desktop-chatgpt-closeup.gif" alt="ChatGPT"><br><sub><b>ChatGPT</b> · plain greeting, starter list, neutral pill</sub></td>
-    <td align="center" width="50%"><img src="assets/previews/closeup/desktop-ollama-closeup.gif" alt="Ollama"><br><sub><b>Ollama</b> · llama avatar, steel palette, boxed composer, runs locally</sub></td>
+    <td align="center" width="50%"><img src="assets/previews/closeup/desktop-chatgpt-closeup.webp" alt="ChatGPT"><br><sub><b>ChatGPT</b> · plain greeting, starter list, neutral pill</sub></td>
+    <td align="center" width="50%"><img src="assets/previews/closeup/desktop-ollama-closeup.webp" alt="Ollama"><br><sub><b>Ollama</b> · llama avatar, steel palette, boxed composer, runs locally</sub></td>
   </tr>
 </table>
 
@@ -43,24 +43,24 @@ frames the screen all follow the active provider, so each one feels like its own
 <table>
   <tr>
     <td width="50%" valign="top">
-      <img src="assets/previews/features/feature-permissions.gif" alt="run_bash permission prompt"><br>
+      <img src="assets/previews/features/feature-permissions.webp" alt="run_bash permission prompt"><br>
       <b>Shell commands, with your permission</b><br>
       <sub>The model can run read-only commands through <code>run_bash</code>. Every call is evaluated first — commands that could never run are refused without asking; the rest show an opencode-style prompt docked to the composer. Pick <code>ls *</code> or the exact command and “Allow always” remembers it. Keyboard driven.</sub>
     </td>
     <td width="50%" valign="top">
-      <img src="assets/previews/features/feature-settings.gif" alt="Settings"><br>
+      <img src="assets/previews/features/feature-settings.webp" alt="Settings"><br>
       <b>Settings that look like the web apps’ dialogs</b><br>
       <sub>Connection (key in the OS keyring, test / remove, endpoint), Behaviour (system instruction), Appearance (screen glow), Permissions (allow / deny rules). The save bar lights up only when something changed.</sub>
     </td>
   </tr>
   <tr>
     <td width="50%" valign="top">
-      <img src="assets/previews/features/feature-history.gif" alt="History drawer"><br>
+      <img src="assets/previews/features/feature-history.webp" alt="History drawer"><br>
       <b>Chats you can come back to</b><br>
       <sub>A history drawer with auto-titled sessions, rename and delete. Sessions persist across shell restarts.</sub>
     </td>
     <td width="50%" valign="top">
-      <img src="assets/previews/features/feature-panels.gif" alt="Model picker and quota"><br>
+      <img src="assets/previews/features/feature-panels.webp" alt="Model picker and quota"><br>
       <b>Models and quota at a glance</b><br>
       <sub>Model list fetched from the provider, per-model request and token counters against the daily limit — in a dropdown, not a config file.</sub>
     </td>
